@@ -4,6 +4,7 @@ import { openState } from "./state";
 import { OpencodeClient } from "./opencode/client";
 import { createBot } from "./telegram/bot";
 import { subscribeEvents } from "./opencode/stream";
+import { opencodeAuthHeaders } from "./opencode/client";
 
 const CONFIG_PATH = process.env["POCKET_CONFIG"] ?? resolve(process.cwd(), "config.json");
 
@@ -17,7 +18,7 @@ async function main(): Promise<void> {
   console.log("[pocket] opencode is up");
 
   const bundle = createBot(cfg, state, client);
-  subscribeEvents(cfg.opencodePort, bundle.handleEvent);
+  subscribeEvents(cfg.opencodePort, bundle.handleEvent, { headers: opencodeAuthHeaders() });
 
   console.log("[pocket] telegram bot starting (long polling)");
   await bundle.bot.start({
