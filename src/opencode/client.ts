@@ -120,19 +120,25 @@ export class OpencodeClient {
   }
 
   async listModels(): Promise<Array<{ providerID: string; modelID: string }>> {
-    const raw = unwrap<unknown>(await this.client.provider.list());
+    let raw: unknown;
+    try {
+      raw = unwrap<unknown>(await this.client.config.providers());
+    } catch {
+      raw = unwrap<unknown>(await this.client.provider.list());
+    }
     const out: Array<{ providerID: string; modelID: string }> = [];
-    let providers: Array<{ id?: string; models?: Record<string, unknown> }> = [];
+    const providers: Array<{ id?: string; models?: Record<string, unknown> }> = [];
     if (Array.isArray(raw)) {
-      providers = raw as Array<{ id?: string; models?: Record<string, unknown> }>;
+      providers.push(...(raw as Array<{ id?: string; models?: Record<string, unknown> }>));
     } else if (raw && typeof raw === "object") {
-      const all = (raw as { all?: unknown }).all;
-      if (Array.isArray(all)) {
-        providers = all as Array<{ id?: string; models?: Record<string, unknown> }>;
+      const rec = raw as Record<string, unknown>;
+      const keyed = rec["providers"] ?? rec["all"];
+      if (Array.isArray(keyed)) {
+        providers.push(...(keyed as Array<{ id?: string; models?: Record<string, unknown> }>));
       } else {
-        const rec = raw as Record<string, { models?: Record<string, unknown> }>;
-        for (const [pid, p] of Object.entries(rec)) {
-          for (const mid of Object.keys(p?.models ?? {})) out.push({ providerID: pid, modelID: mid });
+        for (const [pid, p] of Object.entries(rec as Record<string, { models?: Record<string, unknown> }>)) {
+          if (!p || typeof p !== "object") continue;
+          for (const mid of Object.keys(p.models ?? {})) out.push({ providerID: pid, modelID: mid });
         }
       }
     }

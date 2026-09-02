@@ -20,6 +20,13 @@ const server = Bun.serve({
         { file: "src/a.ts", before: "", after: "", additions: 12, deletions: 3 },
         { file: "src/b.ts", before: "", after: "", additions: 0, deletions: 7 },
       ]);
+    if (url.pathname === "/config/providers")
+      return Response.json({
+        providers: [
+          { id: "opencode", models: { "nemotron-3-ultra-free": {}, "big-pickle": {} } },
+          { id: "chatbai", models: { "glm-5.3-flash": {} } },
+        ],
+      });
     if (url.pathname === "/provider")
       return Response.json({
         all: [
@@ -168,9 +175,9 @@ describe("OpencodeClient", () => {
   test("listModels normalizes provider record into pairs", async () => {
     const m = await makeClient().listModels();
     expect(m).toEqual([
-      { providerID: "anthropic", modelID: "claude-sonnet-4" },
-      { providerID: "anthropic", modelID: "claude-opus-4" },
-      { providerID: "openai", modelID: "gpt-5" },
+      { providerID: "opencode", modelID: "nemotron-3-ultra-free" },
+      { providerID: "opencode", modelID: "big-pickle" },
+      { providerID: "chatbai", modelID: "glm-5.3-flash" },
     ]);
   });
 
