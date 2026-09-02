@@ -26,13 +26,44 @@ your projects
 ## Setup
 
 1. `bun install`
-2. `Copy-Item config.toml.example config.toml` (PowerShell) and fill in:
+2. `Copy-Item config.example.toml config.toml` (PowerShell) and fill in:
    - your bot token from @BotFather
    - your numeric Telegram user ID under `[[allow]]`
    - your project name/path under `[[projects]]`
 3. `bun run start`
 
 On first start the daemon prints a **6-digit pairing code** in the terminal and the bot replies "Pairing required" to any message. Send `/pair <code>` in Telegram once — the bot is then bound to that chat. Only user IDs in `[[allow]]` are ever processed; everyone else is silently ignored.
+
+## Configuration
+
+`config.example.toml` is the template — copy it to `config.toml` and replace the placeholders:
+
+```toml
+# pocket-opencode configuration
+
+telegram_token = "123456:REPLACE_WITH_YOUR_TELEGRAM_BOT_TOKEN"  # from @BotFather
+
+# Port opencode serve listens on (the daemon starts it if not running)
+opencode_port = 4096
+
+# SQLite state file
+db_path = "pocket.db"
+
+# Telegram user IDs allowed to talk to the bot (required — get yours from @userinfobot)
+[[allow]]
+id = 111111111
+
+# Projects you can switch between with /cd
+[[projects]]
+name = "myproject"
+path = "C:/code/myproject"
+```
+
+- `telegram_token` — the token @BotFather gave you when you created the bot.
+- `[[allow]] id` — **your** numeric Telegram user ID (from @userinfobot). This is the hard allowlist: nobody else is processed.
+- `[[projects]] path` — any real folder on this PC; add more `[[projects]]` blocks to switch between them with `/cd`.
+
+`config.toml` is gitignored — your token never gets committed.
 
 ## Commands
 
