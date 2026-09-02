@@ -105,9 +105,13 @@ export function createBot(
   bot.command("new", async (ctx) => {
     const uid = ctx.from!.id;
     const proj = projectByName(activeProjectName(ctx));
-    const id = await client.createSession(proj.path);
-    state.setSession(uid, proj.name, id);
-    await reply(ctx, `session ${escapeHtml(id.slice(0, 8))} created`);
+    try {
+      const id = await client.createSession(proj.path);
+      state.setSession(uid, proj.name, id);
+      await reply(ctx, `session ${escapeHtml(id.slice(0, 8))} created`);
+    } catch (e) {
+      await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
+    }
   });
 
   bot.command("model", async (ctx) => {
@@ -200,8 +204,13 @@ export function createBot(
     const proj = projectByName(activeProjectName(ctx));
     let sid = state.getSession(uid, proj.name);
     if (!sid) {
-      sid = await client.createSession(proj.path);
-      state.setSession(uid, proj.name, sid);
+      try {
+        sid = await client.createSession(proj.path);
+        state.setSession(uid, proj.name, sid);
+      } catch (e) {
+        await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
+        return;
+      }
     }
     const placeholder = await ctx.reply(`working on ${escapeHtml(proj.name)}...`);
     const chatId = ctx.chat!.id;
@@ -269,6 +278,10 @@ export function createBot(
       return;
     }
   };
+
+  bot.catch((err) => {
+    console.error("[bot] handler error:", err.error);
+  });
 
   return { bot, handleEvent, pairingCode };
 }

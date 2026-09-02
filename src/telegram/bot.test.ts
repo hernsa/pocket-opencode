@@ -190,3 +190,33 @@ describe("bot commands", () => {
     expect(sent.some((s) => JSON.stringify(s.args).includes("created"))).toBe(true);
   });
 });
+
+describe("bot resilience", () => {
+  test("relay replies with error instead of crashing when createSession fails", async () => {
+    const client = makeClient();
+    client.createSession = async () => { throw new Error("opencode api error: HTTP 401"); };
+    const state = makeState();
+    const cfg = makeCfg();
+    const bundle = createBot(cfg, state, client, { print: () => {} });
+    intercept(bundle);
+    await bundle.bot.init();
+    sent.length = 0;
+    state.setPairing(111);
+    await bundle.bot.handleUpdate(textUpdate(111, 111, "hello there"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes("could not reach opencode"))).toBe(true);
+  });
+
+  test("bot.catch swallows command errors so polling survives", async () => {
+    const client = makeClient();
+    client.createSession = async () => { throw new Error("opencode api error: HTTP 500"); };
+    const state = makeState();
+    const cfg = makeCfg();
+    const bundle = createBot(cfg, state, client, { print: () => {} });
+    intercept(bundle);
+    await bundle.bot.init();
+    sent.length = 0;
+    state.setPairing(111);
+    await expect(bundle.bot.handleUpdate(textUpdate(111, 111, "/new"))).resolves.toBeUndefined();
+    expect(sent.some((s) => JSON.stringify(s.args).includes("could not reach opencode"))).toBe(true);
+  });
+});
