@@ -1,5 +1,5 @@
 node_modules/
-config.toml
+config.json
 *.db
 *.db-journal
 dist/

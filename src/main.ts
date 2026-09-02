@@ -5,7 +5,7 @@ import { OpencodeClient } from "./opencode/client";
 import { createBot } from "./telegram/bot";
 import { subscribeEvents } from "./opencode/stream";
 
-const CONFIG_PATH = process.env["POCKET_CONFIG"] ?? resolve(process.cwd(), "config.toml");
+const CONFIG_PATH = process.env["POCKET_CONFIG"] ?? resolve(process.cwd(), "config.json");
 
 async function main(): Promise<void> {
   const cfg = loadConfig(CONFIG_PATH);

@@ -4,17 +4,17 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig, ConfigError } from "./config";
 
-function writeCfg(toml: string): string {
+function writeCfg(json: string): string {
   const dir = mkdtempSync(join(tmpdir(), "poc-cfg-"));
-  const p = join(dir, "config.toml");
-  writeFileSync(p, toml);
+  const p = join(dir, "config.json");
+  writeFileSync(p, json);
   return p;
 }
 
 describe("loadConfig", () => {
   test("parses full config", () => {
     const path = writeCfg(
-      `telegram_token = "123:ABC"\nopencode_port = 4096\ndb_path = "state.db"\n\n[[projects]]\nname = "web"\npath = "C:/code/web"\n\n[[projects]]\nname = "api"\npath = "C:/code/api"\n\n[[allow]]\nid = 111\n\n[[allow]]\nid = 222\n`
+      `{"telegram_token":"123:ABC","opencode_port":4096,"db_path":"state.db","allow":[111,222],"projects":[{"name":"web","path":"C:/code/web"},{"name":"api","path":"C:/code/api"}]}`
     );
     const cfg = loadConfig(path);
     expect(cfg.telegramToken).toBe("123:ABC");
@@ -29,7 +29,7 @@ describe("loadConfig", () => {
 
   test("applies defaults", () => {
     const path = writeCfg(
-      `telegram_token = "123:ABC"\n[[allow]]\nid = 7\n[[projects]]\nname = "x"\npath = "C:/x"\n`
+      `{"telegram_token":"123:ABC","allow":[7],"projects":[{"name":"x","path":"C:/x"}]}`
     );
     const cfg = loadConfig(path);
     expect(cfg.opencodePort).toBe(4096);
@@ -37,26 +37,26 @@ describe("loadConfig", () => {
   });
 
   test("rejects missing token", () => {
-    const path = writeCfg(`[[allow]]\nid = 7\n[[projects]]\nname = "x"\npath = "C:/x"\n`);
+    const path = writeCfg(`{"allow":[7],"projects":[{"name":"x","path":"C:/x"}]}`);
     expect(() => loadConfig(path)).toThrow(ConfigError);
   });
 
   test("rejects empty allowlist", () => {
-    const path = writeCfg(`telegram_token = "t"\n[[projects]]\nname = "x"\npath = "C:/x"\n`);
+    const path = writeCfg(`{"telegram_token":"t","allow":[],"projects":[{"name":"x","path":"C:/x"}]}`);
     expect(() => loadConfig(path)).toThrow(ConfigError);
   });
 
   test("rejects zero projects", () => {
-    const path = writeCfg(`telegram_token = "t"\n[[allow]]\nid = 7\n`);
+    const path = writeCfg(`{"telegram_token":"t","allow":[7],"projects":[]}`);
     expect(() => loadConfig(path)).toThrow(ConfigError);
   });
 
-  test("rejects malformed toml", () => {
-    const path = writeCfg(`this is not = toml ===\n`);
+  test("rejects malformed json", () => {
+    const path = writeCfg(`{ not json`);
     expect(() => loadConfig(path)).toThrow(ConfigError);
   });
 
   test("rejects missing file", () => {
-    expect(() => loadConfig("Z:/definitely/not/here.toml")).toThrow(ConfigError);
+    expect(() => loadConfig("Z:/definitely/not/here.json")).toThrow(ConfigError);
   });
 });

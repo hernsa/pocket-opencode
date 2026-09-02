@@ -1,0 +1,9 @@
+{
+  "telegram_token": "123456:REPLACE_WITH_YOUR_TELEGRAM_BOT_TOKEN",
+  "opencode_port": 4096,
+  "db_path": "pocket.db",
+  "allow": [111111111],
+  "projects": [
+    { "name": "myproject", "path": "C:/code/myproject" }
+  ]
+}

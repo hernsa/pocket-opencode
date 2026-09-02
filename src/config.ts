@@ -1,5 +1,4 @@
 import { readFileSync, existsSync } from "node:fs";
-import { parse } from "smol-toml";
 
 export class ConfigError extends Error {}
 
@@ -20,9 +19,9 @@ export function loadConfig(path: string): AppConfig {
   if (!existsSync(path)) throw new ConfigError(`config not found: ${path}`);
   let raw: unknown;
   try {
-    raw = parse(readFileSync(path, "utf8"));
+    raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
-    throw new ConfigError(`invalid TOML in ${path}: ${(e as Error).message}`);
+    throw new ConfigError(`invalid JSON in ${path}: ${(e as Error).message}`);
   }
   const t = (raw ?? {}) as Record<string, unknown>;
 
@@ -33,24 +32,22 @@ export function loadConfig(path: string): AppConfig {
 
   const allow = t["allow"];
   const allowedUserIds = Array.isArray(allow)
-    ? allow
-        .map((e) => (e as Record<string, unknown>)["id"])
-        .filter((id): id is number => typeof id === "number")
+    ? allow.filter((id): id is number => typeof id === "number")
     : [];
   if (allowedUserIds.length === 0) {
-    throw new ConfigError("at least one [[allow]] id is required");
+    throw new ConfigError(`"allow" must be an array of your Telegram user IDs, e.g. "allow": [123456789]`);
   }
 
   const projectsRaw = Array.isArray(t["projects"]) ? t["projects"] : [];
   const projects: Project[] = projectsRaw.map((p) => {
     const e = p as Record<string, unknown>;
     if (typeof e["name"] !== "string" || typeof e["path"] !== "string") {
-      throw new ConfigError("each [[projects]] entry needs name and path");
+      throw new ConfigError(`each entry in "projects" needs "name" and "path"`);
     }
     return { name: e["name"], path: e["path"] };
   });
   if (projects.length === 0) {
-    throw new ConfigError("at least one [[projects]] entry is required");
+    throw new ConfigError(`at least one entry in "projects" is required`);
   }
 
   return {
