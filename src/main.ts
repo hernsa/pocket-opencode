@@ -18,7 +18,10 @@ async function main(): Promise<void> {
   console.log("[pocket] opencode is up");
 
   const bundle = createBot(cfg, state, client);
-  subscribeEvents(cfg.opencodePort, bundle.handleEvent, { headers: opencodeAuthHeaders() });
+  const authHeaders = opencodeAuthHeaders();
+  for (const p of cfg.projects) {
+    subscribeEvents(cfg.opencodePort, bundle.handleEvent, { headers: authHeaders, directory: p.path });
+  }
 
   console.log("[pocket] telegram bot starting (long polling)");
   await bundle.bot.start({

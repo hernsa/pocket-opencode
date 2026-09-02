@@ -22,8 +22,10 @@ const server = Bun.serve({
       ]);
     if (url.pathname === "/provider")
       return Response.json({
-        anthropic: { id: "anthropic", models: { "claude-sonnet-4": {}, "claude-opus-4": {} } },
-        openai: { id: "openai", models: { "gpt-5": {} } },
+        all: [
+          { id: "anthropic", models: { "claude-sonnet-4": {}, "claude-opus-4": {} } },
+          { id: "openai", models: { "gpt-5": {} } },
+        ],
       });
     if (url.pathname === "/agent") return Response.json([{ name: "build" }, { name: "plan" }]);
     if (url.pathname.startsWith("/session/sess-1/permissions/")) return Response.json({ ok: true });

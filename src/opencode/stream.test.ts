@@ -150,4 +150,33 @@ describe("subscribeEvents", () => {
     sub.unsubscribe();
     server.stop(true);
   }, 10000);
+
+  test("connects with directory query param", async () => {
+    const probe = { dir: null as string | null };
+    const received: OcEvent[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname !== "/event") return new Response("nf", { status: 404 });
+        probe.dir = url.searchParams.get("directory");
+        const body = new ReadableStream({
+          start(ctrl) {
+            ctrl.enqueue(
+              new TextEncoder().encode('data: {"type":"session.idle","properties":{}}\n\n')
+            );
+          },
+        });
+        return new Response(body, { headers: { "content-type": "text/event-stream" } });
+      },
+    });
+    const sub = subscribeEvents(server.port!, (e) => received.push(e), {
+      directory: "C:/Users/Admin/Downloads",
+    });
+    for (let i = 0; i < 100 && received.length < 1; i++) await Bun.sleep(50);
+    expect(received.length).toBe(1);
+    expect(probe.dir).toBe("C:/Users/Admin/Downloads");
+    sub.unsubscribe();
+    server.stop(true);
+  }, 10000);
 });

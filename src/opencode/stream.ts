@@ -67,13 +67,14 @@ export interface EventSubscription {
 export function subscribeEvents(
   port: number,
   onEvent: (e: OcEvent) => void,
-  opts?: { headers?: Record<string, string> }
+  opts?: { headers?: Record<string, string>; directory?: string }
 ): EventSubscription {
   let stopped = false;
   void (async () => {
     while (!stopped) {
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/event`, {
+        const dir = opts?.directory ? `?directory=${encodeURIComponent(opts.directory)}` : "";
+        const res = await fetch(`http://127.0.0.1:${port}/event${dir}`, {
           headers: { accept: "text/event-stream", ...(opts?.headers ?? {}) },
         });
         if (!res.ok || !res.body) throw new Error(`event stream status ${res.status}`);

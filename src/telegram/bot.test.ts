@@ -148,6 +148,19 @@ describe("bot prompt relay", () => {
     ctx.bundle.handleEvent({ type: "session.error", properties: { sessionID: "sess-1", message: "boom" } });
     expect(sent.some((s) => JSON.stringify(s.args).includes("boom"))).toBe(true);
   });
+
+  test("session.error unwraps nested error.data.message (opencode shape)", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({
+      type: "session.error",
+      properties: {
+        sessionID: "sess-1",
+        error: { name: "APIError", data: { message: "pre-consume quota failed", statusCode: 403 } },
+      },
+    });
+    expect(sent.some((s) => JSON.stringify(s.args).includes("pre-consume quota failed"))).toBe(true);
+  });
 });
 
 describe("bot commands", () => {

@@ -256,7 +256,9 @@ export function createBot(
       const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : undefined;
       const errMsg = typeof props["message"] === "string"
         ? props["message"]
-        : ((props["error"] as { message?: string } | undefined)?.message ?? "unknown error");
+        : ((props["error"] as { data?: { message?: string } } | undefined)?.data?.message
+          ?? (props["error"] as { message?: string } | undefined)?.message
+          ?? "unknown error");
       if (sid) {
         const r = renderers.get(sid);
         if (r) {
