@@ -54,3 +54,58 @@ export class StreamRenderer {
     return "…" + this.buf.slice(this.buf.length - this.maxLen + 1);
   }
 }
+
+export interface OcEvent {
+  type: string;
+  properties?: unknown;
+}
+
+export interface EventSubscription {
+  unsubscribe: () => void;
+}
+
+export function subscribeEvents(port: number, onEvent: (e: OcEvent) => void): EventSubscription {
+  let stopped = false;
+  void (async () => {
+    while (!stopped) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/event`, {
+          headers: { accept: "text/event-stream" },
+        });
+        if (!res.ok || !res.body) throw new Error(`event stream status ${res.status}`);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          for (;;) {
+            const crlf = buf.indexOf("\r\n\r\n");
+            const lf = buf.indexOf("\n\n");
+            const useCrlf = crlf !== -1 && (lf === -1 || crlf < lf);
+            const idx = useCrlf ? crlf : lf;
+            if (idx === -1) break;
+            const frame = buf.slice(0, idx);
+            buf = buf.slice(idx + (useCrlf ? 4 : 2));
+            const dataLines = frame
+              .split(/\r?\n/)
+              .filter((l) => l.startsWith("data:"))
+              .map((l) => l.slice(5).trim());
+            if (dataLines.length === 0) continue;
+            try {
+              const parsed = JSON.parse(dataLines.join("\n")) as OcEvent;
+              if (parsed && typeof parsed.type === "string") onEvent(parsed);
+            } catch {
+              // non-JSON frame — ignore
+            }
+          }
+        }
+      } catch {
+        // connection failed or dropped — fall through to backoff
+      }
+      if (!stopped) await Bun.sleep(2000);
+    }
+  })();
+  return { unsubscribe: () => { stopped = true; } };
+}
