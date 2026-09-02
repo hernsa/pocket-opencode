@@ -1,0 +1,19 @@
+# pocket-opencode configuration
+# Copy to config.toml and fill in real values. config.toml is gitignored.
+
+telegram_token = "123456:REPLACE_WITH_YOUR_TELEGRAM_BOT_TOKEN"
+
+# Port opencode serve listens on (the daemon starts it if not running)
+opencode_port = 4096
+
+# SQLite state file
+db_path = "pocket.db"
+
+# Telegram user IDs allowed to talk to the bot (required — get yours from @userinfobot)
+[[allow]]
+id = 111111111
+
+# Projects you can switch between with /cd
+[[projects]]
+name = "myproject"
+path = "C:/code/myproject"
