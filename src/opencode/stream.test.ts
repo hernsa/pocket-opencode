@@ -5,7 +5,7 @@ function makeRenderer(extra = {}) {
   const edits: string[] = [];
   let t = 0;
   const r = new StreamRenderer({
-    edit: (s) => edits.push(s),
+    edit: (s) => { edits.push(s); },
     now: () => t,
     maxLen: 50,
     ...extra,
