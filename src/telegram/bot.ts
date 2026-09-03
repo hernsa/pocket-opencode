@@ -29,6 +29,21 @@ export interface BotBundle {
 
 const THINK_VALUES = ["low", "medium", "high", "max"] as const;
 
+export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
+  { command: "status", description: "Show project, session, model, health" },
+  { command: "new", description: "Start a fresh opencode session" },
+  { command: "project", description: "Pick a project and browse its sessions" },
+  { command: "session", description: "Browse sessions in current project" },
+  { command: "model", description: "Switch the model" },
+  { command: "agent", description: "Switch the agent" },
+  { command: "think", description: "Set thinking: low/medium/high/max" },
+  { command: "cd", description: "Switch project folder" },
+  { command: "reasoning", description: "Show/hide thinking chains" },
+  { command: "stop", description: "Abort the current run" },
+  { command: "undo", description: "Revert opencode's last change" },
+  { command: "diff", description: "Show changed files (+/- lines)" },
+];
+
 export function createBot(
   cfg: AppConfig,
   state: StateStore,
@@ -214,17 +229,45 @@ export function createBot(
 
   bot.command("project", async (ctx) => {
     const projects = await client.listProjects().catch(() => []);
-    if (projects.length === 0) return void reply(ctx, "no projects known to opencode");
+    const dirs = [...new Set([...projects.map((p) => p.worktree), ...cfg.projects.map((p) => p.path)])];
+    if (dirs.length === 0) return void reply(ctx, "no projects known to opencode");
     const kb = new InlineKeyboard();
-    for (const p of projects.slice(0, 20)) kb.text(p.worktree, `pdir:${encodeURIComponent(p.worktree)}`).row();
-    await ctx.reply("Pick a project directory:", { reply_markup: kb });
+    for (const dir of dirs.slice(0, 20)) {
+      const label = dir.split("/").filter(Boolean).pop() ?? dir;
+      kb.text(label, `pdir:${encodeURIComponent(dir)}`).row();
+    }
+    await ctx.reply("Pick a project — browse its sessions or start a new one:", { reply_markup: kb });
   });
 
   bot.callbackQuery(/^pdir:(.+)$/, async (ctx) => {
+    const uid = ctx.from!.id;
     const dir = decodeURIComponent(ctx.match[1]);
-    state.setOverride(ctx.from!.id, "workdir", dir);
+    state.setOverride(uid, "workdir", dir);
     await ctx.answerCallbackQuery();
-    await reply(ctx, `project set: ${escapeHtml(dir)}`);
+    const sessions = await client.listSessions(dir).catch(() => []);
+    const active = state.getSession(uid, dir);
+    const kb = new InlineKeyboard();
+    for (const s of sessions.slice(0, 10)) {
+      const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
+      kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
+    }
+    kb.text("\u2795 new session", `pnew:${ctx.match[1]}`).row();
+    await ctx.reply(`Sessions in ${escapeHtml(dir)}:`, { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^pnew:(.+)$/, async (ctx) => {
+    const uid = ctx.from!.id;
+    const dir = decodeURIComponent(ctx.match[1]);
+    try {
+      const id = await client.createSession(dir);
+      state.setOverride(uid, "workdir", dir);
+      state.setSession(uid, dir, id);
+      await ctx.answerCallbackQuery();
+      await reply(ctx, `new session ${escapeHtml(id.slice(0, 8))} in ${escapeHtml(dir)}`);
+    } catch (e) {
+      await ctx.answerCallbackQuery().catch(() => {});
+      await reply(ctx, `could not create session: ${escapeHtml((e as Error).message)}`);
+    }
   });
 
   bot.command("stop", async (ctx) => {
@@ -506,6 +549,14 @@ export function createBot(
   bot.catch((err) => {
     console.error("[bot] handler error:", err.error);
   });
+
+  const baseInit = bot.init.bind(bot);
+  bot.init = async (): Promise<void> => {
+    await baseInit();
+    await bot.api.setMyCommands(BOT_COMMANDS).catch((e) => {
+      console.error("[bot] setMyCommands failed:", e);
+    });
+  };
 
   return { bot, handleEvent, pairingCode };
 }

@@ -95,6 +95,8 @@ function cbUpdate(data: string): Update {
   } as unknown as Update;
 }
 
+let registeredCommands: unknown;
+
 async function makeSetup() {
   const client = makeClient();
   const state = makeState();
@@ -103,6 +105,7 @@ async function makeSetup() {
   const bundle = createBot(cfg, state, client, { print: (s) => prints.push(s) });
   intercept(bundle);
   await bundle.bot.init();
+  registeredCommands = sent.find((s) => s.method === "setMyCommands")?.args;
   sent.length = 0;
   return { client, state, cfg, prints, bundle };
 }
@@ -494,11 +497,37 @@ describe("full-answer delivery", () => {
   test("/project lists worktrees and pdir callback stores workdir override", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
-    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("C:/x"));
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("pdir:"));
     expect(kbMsg).toBeDefined();
-    expect(JSON.stringify(kbMsg!.args)).toContain("pdir:");
+    expect(JSON.stringify(kbMsg!.args)).toContain(encodeURIComponent("C:/x"));
+    expect(ctx.client.calls.some((c) => c === "listProjects")).toBe(true);
+  });
+
+  test("pdir shows sessions in that project plus a new-session button", async () => {
+    ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:C%3A%2Fx"));
     expect(ctx.state.getOverride(111, "workdir")).toBe("C:/x");
-    expect(ctx.client.calls.some((c) => c === "listProjects")).toBe(true);
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("Sessions in C:/x"));
+    expect(kbMsg).toBeDefined();
+    const kb = JSON.stringify(kbMsg!.args);
+    expect(kb).toContain("old title");
+    expect(kb).toContain("pnew:C%3A%2Fx");
+  });
+
+  test("pnew creates a session in the chosen directory", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pnew:C%3A%2Fx"));
+    expect(ctx.client.calls.some((c) => c === "createSession:C:/x:")).toBe(true);
+    expect(ctx.state.getSession(111, "C:/x")).toBe("sess-1");
+    expect(ctx.state.getOverride(111, "workdir")).toBe("C:/x");
+    expect(sent.some((s) => JSON.stringify(s.args).includes("new session"))).toBe(true);
+  });
+
+  test("setMyCommands registers the slash-command menu", async () => {
+    expect(registeredCommands).toBeDefined();
+    const s = JSON.stringify(registeredCommands);
+    expect(s).toContain("project");
+    expect(s).toContain("session");
+    expect(s).toContain("reasoning");
   });
 });
