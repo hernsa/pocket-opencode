@@ -45,6 +45,8 @@ function makeClient(): OcApi & { calls: string[] } {
     getDiff: async () => { calls.push("getDiff"); return [{ file: "a.ts", additions: 2, deletions: 1 }]; },
     listModels: async () => { calls.push("listModels"); return [{ providerID: "anthropic", modelID: "claude-sonnet-4" }]; },
     listAgents: async () => { calls.push("listAgents"); return ["build", "plan"]; },
+    listSessions: async (d) => { calls.push(`listSessions:${d}`); return [{ id: "sess-a", title: "old title" }, { id: "sess-b", title: "second" }]; },
+    renameSession: async (sid, t) => { calls.push(`rename:${sid}:${t}`); },
     replyPermission: async (s, p, r) => { calls.push(`perm:${s}:${p}:${r}`); },
   };
 }
@@ -75,6 +77,19 @@ function textUpdate(userId: number, chatId: number, text: string): Update {
         : undefined,
       chat: { id: chatId, type: "private", first_name: "T" },
       from: { id: userId, is_bot: false, first_name: "T" },
+    },
+  } as unknown as Update;
+}
+
+function cbUpdate(data: string): Update {
+  return {
+    update_id: Math.floor(Math.random() * 1e6),
+    callback_query: {
+      id: "c" + Math.floor(Math.random() * 1e6),
+      from: { id: 111, is_bot: false, first_name: "T" } as never,
+      data,
+      chat_instance: "ci",
+      message: { message_id: 777, date: 0, chat: { id: 111, type: "private" }, from: { id: 42, is_bot: true, first_name: "B" } } as never,
     },
   } as unknown as Update;
 }
@@ -342,5 +357,83 @@ describe("bot streaming last mile (real opencode shape)", () => {
     });
     const after = sent.filter((s) => s.method === "editMessageText").length;
     expect(after).toBe(before);
+  });
+});
+
+describe("session browser", () => {
+  test("/session lists sessions as inline keyboard", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/session"));
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("old title"));
+    expect(kbMsg).toBeDefined();
+    expect(JSON.stringify(kbMsg!.args)).toContain("sess:sess-a");
+    expect(JSON.stringify(kbMsg!.args)).toContain("sess:sess-b");
+  });
+
+  test("/session with no sessions says so", async () => {
+    ctx.state.setPairing(111);
+    ctx.client.listSessions = async () => [];
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/session"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes("no sessions yet"))).toBe(true);
+  });
+
+  test("sessuse makes the tapped session active for the project", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(cbUpdate("sessuse:sess-b"));
+    expect(ctx.state.getSession(111, "web")).toBe("sess-b");
+    expect(sent.some((s) => JSON.stringify(s.args).includes("switched to session"))).toBe(true);
+  });
+
+  test("sessinfo shows session details", async () => {
+    ctx.state.setPairing(111);
+    ctx.state.setSession(111, "web", "sess-a");
+    await ctx.bundle.bot.handleUpdate(cbUpdate("sessinfo:sess-a"));
+    const msg = sent.find((s) => JSON.stringify(s.args).includes("sess-a"));
+    expect(msg).toBeDefined();
+    expect(JSON.stringify(msg!.args)).toContain("active");
+  });
+
+  test("rename flow: sessren then next text renames instead of prompting", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(cbUpdate("sessren:sess-a"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes("send the new title"))).toBe(true);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "better name"));
+    expect(ctx.client.calls.some((c) => c === "rename:sess-a:better name")).toBe(true);
+    expect(ctx.client.calls.some((c) => c.startsWith("prompt:"))).toBe(false);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "real prompt"));
+    expect(ctx.client.calls.some((c) => c.startsWith("prompt:sess-1:real prompt"))).toBe(true);
+  });
+});
+
+describe("thinking chains", () => {
+  test("/reasoning on|off stores override", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/reasoning on"));
+    expect(ctx.state.getOverride(111, "reasoning")).toBe("on");
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/reasoning off"));
+    expect(ctx.state.getOverride(111, "reasoning")).toBe("off");
+  });
+
+  test("reasoning deltas buffered and sent on idle when enabled", async () => {
+    ctx.state.setPairing(111);
+    ctx.state.setOverride(111, "reasoning", "on");
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "let me think about " } });
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "the bug" } });
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "text", delta: "fixed it" } });
+    ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
+    const think = sent.find((s) => JSON.stringify(s.args).includes("thinking"));
+    expect(think).toBeDefined();
+    expect(JSON.stringify(think!.args)).toContain("let me think about the bug");
+  });
+
+  test("no thinking message when disabled even with buffered reasoning", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "secret thoughts" } });
+    ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
+    expect(sent.some((s) => JSON.stringify(s.args).includes("secret thoughts"))).toBe(false);
   });
 });

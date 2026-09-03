@@ -157,6 +157,20 @@ export class OpencodeClient {
       .filter((n): n is string => typeof n === "string" && n.length > 0);
   }
 
+  async listSessions(directory?: string): Promise<Array<{ id: string; title: string }>> {
+    const rows = unwrap<Array<unknown>>(
+      await this.client.session.list({ query: { directory } })
+    );
+    return rows
+      .map((r) => r as { id?: string; title?: string })
+      .filter((r): r is { id: string; title?: string } => typeof r.id === "string" && r.id.length > 0)
+      .map((r) => ({ id: r.id, title: typeof r.title === "string" ? r.title : r.id }));
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    await this.client.session.update({ path: { id: sessionId }, body: { title } });
+  }
+
   async replyPermission(sessionId: string, permissionId: string, response: "once" | "always" | "reject"): Promise<void> {
     await this.client.postSessionIdPermissionsPermissionId({
       path: { id: sessionId, permissionID: permissionId },

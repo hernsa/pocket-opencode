@@ -11,7 +11,14 @@ const server = Bun.serve({
     try { body = await req.json(); } catch {}
     seen.push({ method: req.method, path: url.pathname, body });
     if (url.pathname === "/project/current") return Response.json({ id: "p1" });
+    if (url.pathname === "/session" && req.method === "GET")
+      return Response.json([
+        { id: "sess-a", title: "old title", time: { created: 1 } },
+        { id: "sess-b", title: "second" },
+        { nope: true },
+      ]);
     if (url.pathname === "/session" && req.method === "POST") return Response.json({ id: "sess-1" });
+    if (url.pathname === "/session/sess-a") return Response.json({ id: "sess-a", title: "renamed!" });
     if (url.pathname === "/session/sess-1/prompt_async") return new Response(null, { status: 204 });
     if (url.pathname === "/session/sess-1/abort") return Response.json({ ok: true });
     if (url.pathname === "/session/sess-1/revert") return Response.json({ ok: true });
@@ -190,5 +197,21 @@ describe("OpencodeClient", () => {
     const call = seen.find((c) => c.path === "/session/sess-1/permissions/perm-9");
     expect(call).toBeDefined();
     expect((call!.body as { response: string }).response).toBe("once");
+  });
+
+  test("listSessions normalizes rows and drops malformed", async () => {
+    const rows = await makeClient().listSessions("C:/code/web");
+    expect(rows).toEqual([
+      { id: "sess-a", title: "old title" },
+      { id: "sess-b", title: "second" },
+    ]);
+    expect(seen.some((c) => c.method === "GET" && c.path === "/session")).toBe(true);
+  });
+
+  test("renameSession posts title update", async () => {
+    await makeClient().renameSession("sess-a", "renamed!");
+    const call = seen.find((c) => c.path === "/session/sess-a" && c.method !== "GET");
+    expect(call).toBeDefined();
+    expect((call!.body as { title?: string }).title).toBe("renamed!");
   });
 });

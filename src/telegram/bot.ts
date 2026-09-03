@@ -1,7 +1,7 @@
 import { Bot, type Context, InlineKeyboard } from "grammy";
 import type { AppConfig } from "../config";
 import type { StateStore } from "../state";
-import { escapeHtml, chunk } from "./format";
+import { escapeHtml, chunk, mdToTelegramHtml, balancePre } from "./format";
 import { StreamRenderer, type OcEvent } from "../opencode/stream";
 import type { PromptOpts } from "../opencode/client";
 import { ApprovalStore, registerApprovalHandlers } from "./approvals";
@@ -15,6 +15,8 @@ export interface OcApi {
   getDiff(sessionId: string): Promise<Array<{ file: string; additions: number; deletions: number }>>;
   listModels(): Promise<Array<{ providerID: string; modelID: string }>>;
   listAgents(): Promise<string[]>;
+  listSessions(directory: string): Promise<Array<{ id: string; title: string }>>;
+  renameSession(sessionId: string, title: string): Promise<void>;
   replyPermission(sessionId: string, permissionId: string, response: "once" | "always" | "reject"): Promise<void>;
 }
 
@@ -42,6 +44,8 @@ export function createBot(
 
   const renderers = new Map<string, StreamRenderer>();
   const roles = new Map<string, string>();
+  const pendingRename = new Map<number, string>();
+  const reasoningBuf = new Map<string, string[]>();
 
   function roleOf(messageId: unknown): string | undefined {
     return typeof messageId === "string" ? roles.get(messageId) : undefined;
@@ -55,7 +59,7 @@ export function createBot(
   }
 
   async function reply(ctx: Context, text: string): Promise<void> {
-    for (const part of chunk(text)) {
+    for (const part of balancePre(chunk(text))) {
       await ctx.reply(part, { parse_mode: "HTML" });
     }
   }
@@ -102,6 +106,7 @@ export function createBot(
       `model: ${escapeHtml(state.getOverride(uid, "model") ?? "default")}`,
       `agent: ${escapeHtml(state.getOverride(uid, "agent") ?? "default")}`,
       `thinking: ${escapeHtml(state.getOverride(uid, "thinking") ?? "not set")}`,
+      `reasoning: ${escapeHtml(state.getOverride(uid, "reasoning") ?? "off")}`,
       `opencode: ${up ? "up" : "down"}`,
     ];
     await reply(ctx, lines.join("\n"));
@@ -192,6 +197,59 @@ export function createBot(
     await reply(ctx, "/files coming soon");
   });
 
+  bot.command("session", async (ctx) => {
+    const uid = ctx.from!.id;
+    const proj = projectByName(activeProjectName(ctx));
+    const sessions = await client.listSessions(proj.path).catch(() => []);
+    if (sessions.length === 0) return void reply(ctx, "no sessions yet");
+    const active = state.getSession(uid, proj.name);
+    const kb = new InlineKeyboard();
+    for (const s of sessions.slice(0, 10)) {
+      const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
+      kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
+    }
+    await ctx.reply("Sessions:", { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^sess:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const kb = new InlineKeyboard()
+      .text("use", `sessuse:${id}`)
+      .text("rename", `sessren:${id}`)
+      .text("info", `sessinfo:${id}`);
+    await ctx.answerCallbackQuery();
+    await ctx.reply(`session ${escapeHtml(id.slice(0, 8))}`, { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^sessuse:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    state.setSession(ctx.from!.id, activeProjectName(ctx), id);
+    await ctx.answerCallbackQuery();
+    await reply(ctx, `switched to session ${escapeHtml(id.slice(0, 8))}`);
+  });
+
+  bot.callbackQuery(/^sessinfo:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const active = state.getSession(ctx.from!.id, activeProjectName(ctx));
+    await ctx.answerCallbackQuery();
+    await reply(ctx, `session ${escapeHtml(id)}\nstatus: ${active === id ? "active for this project" : "archived"}`);
+  });
+
+  bot.callbackQuery(/^sessren:(.+)$/, async (ctx) => {
+    pendingRename.set(ctx.from!.id, ctx.match[1]);
+    await ctx.answerCallbackQuery();
+    await reply(ctx, "send the new title");
+  });
+
+  bot.command("reasoning", async (ctx) => {
+    const arg = (ctx.message?.text ?? "").split(/\s+/)[1]?.toLowerCase();
+    if (arg !== "on" && arg !== "off") {
+      return void reply(ctx, "Usage: /reasoning &lt;on|off&gt;");
+    }
+    state.setOverride(ctx.from!.id, "reasoning", arg);
+    await reply(ctx, arg === "on" ? "thinking chains will be sent after each answer" : "thinking chains off");
+  });
+
   bot.callbackQuery(/^model:(.+)$/, async (ctx) => {
     const value = ctx.match[1];
     state.setOverride(ctx.from!.id, "model", value);
@@ -217,6 +275,17 @@ export function createBot(
     const uid = ctx.from!.id;
     const text = ctx.message.text;
     if (text.startsWith("/")) return;
+    if (pendingRename.has(uid)) {
+      const id = pendingRename.get(uid)!;
+      pendingRename.delete(uid);
+      try {
+        await client.renameSession(id, text);
+        await reply(ctx, `renamed to ${escapeHtml(text)}`);
+      } catch (e) {
+        await reply(ctx, `rename failed: ${escapeHtml((e as Error).message)}`);
+      }
+      return;
+    }
     const proj = projectByName(activeProjectName(ctx));
     let sid = state.getSession(uid, proj.name);
     if (!sid) {
@@ -233,7 +302,7 @@ export function createBot(
     const msgId = placeholder.message_id;
     renderers.set(sid, new StreamRenderer({
       edit: (t) => {
-        void ctx.api.editMessageText(chatId, msgId, escapeHtml(t), { parse_mode: "HTML" }).catch(() => {});
+        void ctx.api.editMessageText(chatId, msgId, mdToTelegramHtml(t), { parse_mode: "HTML" }).catch(() => {});
       },
     }));
     try {
@@ -261,10 +330,16 @@ export function createBot(
     if (e.type === "message.part.delta") {
       const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : undefined;
       if (!sid) return;
-      if (props["field"] !== "text") return;
-      if (roleOf(props["messageID"]) !== "assistant") return;
       const delta = props["delta"];
       if (typeof delta !== "string" || delta.length === 0) return;
+      if (roleOf(props["messageID"]) !== "assistant") return;
+      if (props["field"] === "reasoning") {
+        const buf = reasoningBuf.get(sid) ?? [];
+        buf.push(delta);
+        reasoningBuf.set(sid, buf);
+        return;
+      }
+      if (props["field"] !== "text") return;
       renderers.get(sid)?.push(delta);
       return;
     }
@@ -290,10 +365,22 @@ export function createBot(
       const sid = props["sessionID"];
       if (typeof sid !== "string") return;
       const r = renderers.get(sid);
-      if (!r) return;
-      r.finalize();
-      renderers.delete(sid);
+      if (r) {
+        r.finalize();
+        renderers.delete(sid);
+      }
       void bot.api.sendMessage(cfg.allowedUserIds[0], "done").catch(() => {});
+      const thinking = reasoningBuf.get(sid);
+      if (thinking && thinking.length > 0) {
+        reasoningBuf.delete(sid);
+        if (state.getOverride(cfg.allowedUserIds[0], "reasoning") === "on") {
+          void (async () => {
+            for (const part of balancePre(chunk(thinking.join("")))) {
+              await bot.api.sendMessage(cfg.allowedUserIds[0], `\ud83e\udde0 thinking\n${mdToTelegramHtml(part)}`, { parse_mode: "HTML" }).catch(() => {});
+            }
+          })();
+        }
+      }
       return;
     }
     if (e.type === "session.error") {

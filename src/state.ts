@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 
-export type OverrideKey = "model" | "agent" | "thinking";
+export type OverrideKey = "model" | "agent" | "thinking" | "reasoning";
 
 export interface StateStore {
   isPaired(chatId: number): boolean;
