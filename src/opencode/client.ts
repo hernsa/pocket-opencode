@@ -167,6 +167,14 @@ export class OpencodeClient {
       .map((r) => ({ id: r.id, title: typeof r.title === "string" ? r.title : r.id }));
   }
 
+  async listProjects(): Promise<Array<{ id: string; worktree: string }>> {
+    const rows = unwrap<Array<unknown>>(await this.client.project.list());
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((r) => r as { id?: string; worktree?: string })
+      .filter((r): r is { id: string; worktree: string } => typeof r.id === "string" && typeof r.worktree === "string" && r.worktree.length > 0);
+  }
+
   async renameSession(sessionId: string, title: string): Promise<void> {
     await this.client.session.update({ path: { id: sessionId }, body: { title } });
   }

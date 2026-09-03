@@ -27,7 +27,8 @@ describe("integration smoke", () => {
           setTimeout(() => {
             const emit = eventSink[0];
             if (!emit) return;
-            emit({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text" }, delta: "hi from opencode" } });
+            emit({ type: "message.updated", properties: { info: { id: "msg_s1", role: "assistant" } } });
+            emit({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "hi from opencode", sessionID: "sess-1", messageID: "msg_s1", id: "p1" } } });
             emit({ type: "session.idle", properties: { sessionID: "sess-1" } });
           }, 50);
           return new Response(null, { status: 204 });
@@ -81,12 +82,14 @@ describe("integration smoke", () => {
     const unsub = subscribeEvents(server.port!, bundle.handleEvent);
     // the stub emits into eventSink; give the SSE connection a moment, then drive manually as fallback
     await Bun.sleep(200);
-    bundle.handleEvent({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text" }, delta: "hi from opencode" } });
+    bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_s1", role: "assistant" } } } as never);
+    bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "hi from opencode", sessionID: "sess-1", messageID: "msg_s1", id: "p1" } } });
     bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
+    await Bun.sleep(5);
 
     expect(sessionCount).toBe(1);
     expect(sent.some((m) => m === "sendMessage")).toBe(true);
-    expect(state.getSession(42, "proj")).toBe("sess-1");
+    expect(state.getSession(42, "C:/tmp/proj")).toBe("sess-1");
     unsub.unsubscribe();
     state.close();
     server.stop(true);

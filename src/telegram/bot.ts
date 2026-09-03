@@ -2,7 +2,7 @@ import { Bot, type Context, InlineKeyboard } from "grammy";
 import type { AppConfig } from "../config";
 import type { StateStore } from "../state";
 import { escapeHtml, chunk, mdToTelegramHtml, balancePre } from "./format";
-import { StreamRenderer, type OcEvent } from "../opencode/stream";
+import type { OcEvent } from "../opencode/stream";
 import type { PromptOpts } from "../opencode/client";
 import { ApprovalStore, registerApprovalHandlers } from "./approvals";
 
@@ -16,6 +16,7 @@ export interface OcApi {
   listModels(): Promise<Array<{ providerID: string; modelID: string }>>;
   listAgents(): Promise<string[]>;
   listSessions(directory: string): Promise<Array<{ id: string; title: string }>>;
+  listProjects(): Promise<Array<{ id: string; worktree: string }>>;
   renameSession(sessionId: string, title: string): Promise<void>;
   replyPermission(sessionId: string, permissionId: string, response: "once" | "always" | "reject"): Promise<void>;
 }
@@ -42,10 +43,48 @@ export function createBot(
   const approvals = new ApprovalStore();
   registerApprovalHandlers(bot, approvals, client);
 
-  const renderers = new Map<string, StreamRenderer>();
+  interface RenderState {
+    chatId: number;
+    msgId: number;
+    msgIds: string[];
+    texts: Map<string, string>;
+    lastEdit: number;
+  }
+
+  const renderStates = new Map<string, RenderState>();
   const roles = new Map<string, string>();
   const pendingRename = new Map<number, string>();
   const reasoningBuf = new Map<string, string[]>();
+  const toolMsg = new Map<string, number>();
+
+  function joinTexts(rs: RenderState): string {
+    return rs.msgIds.map((id) => rs.texts.get(id) ?? "").join("\n\n").trim();
+  }
+
+  async function renderThrottled(rs: RenderState): Promise<void> {
+    const now = Date.now();
+    if (now - rs.lastEdit < 1200) return;
+    rs.lastEdit = now;
+    const full = joinTexts(rs);
+    if (full.length === 0) return;
+    const t = full.length > 3000 ? "…" + full.slice(full.length - 3000 + 1) : full;
+    await bot.api.editMessageText(rs.chatId, rs.msgId, mdToTelegramHtml(t), { parse_mode: "HTML" }).catch(() => {});
+  }
+
+  async function deliverFinal(rs: RenderState): Promise<void> {
+    const full = joinTexts(rs);
+    const parts = full.length > 0 ? balancePre(chunk(full).map(mdToTelegramHtml)) : ["(empty response)"];
+    await bot.api.editMessageText(rs.chatId, rs.msgId, parts[0], { parse_mode: "HTML" }).catch(() => {});
+    for (let i = 1; i < parts.length; i++) {
+      await bot.api.sendMessage(rs.chatId, parts[i], { parse_mode: "HTML" }).catch(() => {});
+    }
+  }
+
+  function appendText(rs: RenderState, messageId: string, delta: string): void {
+    const cur = rs.texts.get(messageId) ?? "";
+    if (!rs.texts.has(messageId)) rs.msgIds.push(messageId);
+    rs.texts.set(messageId, cur + delta);
+  }
 
   function roleOf(messageId: unknown): string | undefined {
     return typeof messageId === "string" ? roles.get(messageId) : undefined;
@@ -74,6 +113,13 @@ export function createBot(
     return cfg.projects.find((p) => p.name === name) ?? cfg.projects[0];
   }
 
+  function activeDirectory(ctx: Context): string {
+    const uid = ctx.from!.id;
+    const wd = state.getOverride(uid, "workdir");
+    if (wd) return wd;
+    return projectByName(activeProjectName(ctx)).path;
+  }
+
   bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (uid === undefined || !cfg.allowedUserIds.includes(uid)) return;
@@ -98,11 +144,11 @@ export function createBot(
 
   bot.command("status", async (ctx) => {
     const uid = ctx.from!.id;
-    const name = activeProjectName(ctx);
+    const dir = activeDirectory(ctx);
     const up = await client.health().catch(() => false);
     const lines = [
-      `project: ${escapeHtml(name)}`,
-      `session: ${escapeHtml(state.getSession(uid, name) ?? "none")}`,
+      `directory: ${escapeHtml(dir)}`,
+      `session: ${escapeHtml(state.getSession(uid, dir) ?? "none")}`,
       `model: ${escapeHtml(state.getOverride(uid, "model") ?? "default")}`,
       `agent: ${escapeHtml(state.getOverride(uid, "agent") ?? "default")}`,
       `thinking: ${escapeHtml(state.getOverride(uid, "thinking") ?? "not set")}`,
@@ -114,10 +160,10 @@ export function createBot(
 
   bot.command("new", async (ctx) => {
     const uid = ctx.from!.id;
-    const proj = projectByName(activeProjectName(ctx));
+    const dir = activeDirectory(ctx);
     try {
-      const id = await client.createSession(proj.path);
-      state.setSession(uid, proj.name, id);
+      const id = await client.createSession(dir);
+      state.setSession(uid, dir, id);
       await reply(ctx, `session ${escapeHtml(id.slice(0, 8))} created`);
     } catch (e) {
       await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
@@ -166,9 +212,24 @@ export function createBot(
     await ctx.reply("Switch project:", { reply_markup: kb });
   });
 
+  bot.command("project", async (ctx) => {
+    const projects = await client.listProjects().catch(() => []);
+    if (projects.length === 0) return void reply(ctx, "no projects known to opencode");
+    const kb = new InlineKeyboard();
+    for (const p of projects.slice(0, 20)) kb.text(p.worktree, `pdir:${encodeURIComponent(p.worktree)}`).row();
+    await ctx.reply("Pick a project directory:", { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^pdir:(.+)$/, async (ctx) => {
+    const dir = decodeURIComponent(ctx.match[1]);
+    state.setOverride(ctx.from!.id, "workdir", dir);
+    await ctx.answerCallbackQuery();
+    await reply(ctx, `project set: ${escapeHtml(dir)}`);
+  });
+
   bot.command("stop", async (ctx) => {
     const uid = ctx.from!.id;
-    const sid = state.getSession(uid, activeProjectName(ctx));
+    const sid = state.getSession(uid, activeDirectory(ctx));
     if (!sid) return void reply(ctx, "no active session");
     await client.abort(sid);
     await reply(ctx, "aborted");
@@ -176,7 +237,7 @@ export function createBot(
 
   bot.command("undo", async (ctx) => {
     const uid = ctx.from!.id;
-    const sid = state.getSession(uid, activeProjectName(ctx));
+    const sid = state.getSession(uid, activeDirectory(ctx));
     if (!sid) return void reply(ctx, "no active session");
     await client.undo(sid);
     await reply(ctx, "reverted last change");
@@ -184,7 +245,7 @@ export function createBot(
 
   bot.command("diff", async (ctx) => {
     const uid = ctx.from!.id;
-    const sid = state.getSession(uid, activeProjectName(ctx));
+    const sid = state.getSession(uid, activeDirectory(ctx));
     if (!sid) return void reply(ctx, "no active session");
     const diff = await client.getDiff(sid);
     if (diff.length === 0) return void reply(ctx, "no changes yet");
@@ -199,10 +260,10 @@ export function createBot(
 
   bot.command("session", async (ctx) => {
     const uid = ctx.from!.id;
-    const proj = projectByName(activeProjectName(ctx));
-    const sessions = await client.listSessions(proj.path).catch(() => []);
+    const dir = activeDirectory(ctx);
+    const sessions = await client.listSessions(dir).catch(() => []);
     if (sessions.length === 0) return void reply(ctx, "no sessions yet");
-    const active = state.getSession(uid, proj.name);
+    const active = state.getSession(uid, dir);
     const kb = new InlineKeyboard();
     for (const s of sessions.slice(0, 10)) {
       const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
@@ -223,16 +284,16 @@ export function createBot(
 
   bot.callbackQuery(/^sessuse:(.+)$/, async (ctx) => {
     const id = ctx.match[1];
-    state.setSession(ctx.from!.id, activeProjectName(ctx), id);
+    state.setSession(ctx.from!.id, activeDirectory(ctx), id);
     await ctx.answerCallbackQuery();
     await reply(ctx, `switched to session ${escapeHtml(id.slice(0, 8))}`);
   });
 
   bot.callbackQuery(/^sessinfo:(.+)$/, async (ctx) => {
     const id = ctx.match[1];
-    const active = state.getSession(ctx.from!.id, activeProjectName(ctx));
+    const active = state.getSession(ctx.from!.id, activeDirectory(ctx));
     await ctx.answerCallbackQuery();
-    await reply(ctx, `session ${escapeHtml(id)}\nstatus: ${active === id ? "active for this project" : "archived"}`);
+    await reply(ctx, `session ${escapeHtml(id)}\nstatus: ${active === id ? "active for this directory" : "archived"}`);
   });
 
   bot.callbackQuery(/^sessren:(.+)$/, async (ctx) => {
@@ -286,34 +347,34 @@ export function createBot(
       }
       return;
     }
-    const proj = projectByName(activeProjectName(ctx));
-    let sid = state.getSession(uid, proj.name);
+    const dir = activeDirectory(ctx);
+    let sid = state.getSession(uid, dir);
     if (!sid) {
       try {
-        sid = await client.createSession(proj.path);
-        state.setSession(uid, proj.name, sid);
+        sid = await client.createSession(dir);
+        state.setSession(uid, dir, sid);
       } catch (e) {
         await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
         return;
       }
     }
-    const placeholder = await ctx.reply(`working on ${escapeHtml(proj.name)}...`);
-    const chatId = ctx.chat!.id;
-    const msgId = placeholder.message_id;
-    renderers.set(sid, new StreamRenderer({
-      edit: (t) => {
-        void ctx.api.editMessageText(chatId, msgId, mdToTelegramHtml(t), { parse_mode: "HTML" }).catch(() => {});
-      },
-    }));
+    const placeholder = await ctx.reply("thinking");
+    renderStates.set(sid, {
+      chatId: ctx.chat!.id,
+      msgId: placeholder.message_id,
+      msgIds: [],
+      texts: new Map(),
+      lastEdit: 0,
+    });
     try {
       await client.prompt(sid, text, {
-        directory: proj.path,
+        directory: dir,
         model: parseModel(state.getOverride(uid, "model")),
         agent: state.getOverride(uid, "agent"),
       });
     } catch (e) {
-      renderers.get(sid)?.finalize();
-      renderers.delete(sid);
+      renderStates.delete(sid);
+      toolMsg.delete(sid);
       await reply(ctx, `${escapeHtml((e as Error).message)}`);
     }
   });
@@ -340,43 +401,76 @@ export function createBot(
         return;
       }
       if (props["field"] !== "text") return;
-      renderers.get(sid)?.push(delta);
+      const rs = renderStates.get(sid);
+      const mid = props["messageID"];
+      if (!rs || typeof mid !== "string") return;
+      appendText(rs, mid, delta);
+      void renderThrottled(rs);
       return;
     }
     if (e.type === "message.part.updated") {
       const part = props["part"] as
-        | { sessionID?: string; type?: string; text?: string; messageID?: unknown }
+        | { sessionID?: string; type?: string; text?: string; messageID?: unknown; tool?: string; state?: { status?: string; title?: string; input?: Record<string, unknown> } }
         | undefined;
       const delta = props["delta"];
       const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : part?.sessionID;
       if (!sid) return;
-      const r = renderers.get(sid);
-      if (!r) return;
+      const rs = renderStates.get(sid);
+      if (!rs) return;
       if (typeof delta === "string" && delta.length > 0) {
-        r.push(delta);
+        const mid = typeof part?.messageID === "string" ? part.messageID : undefined;
+        if (mid && part?.type === "text" && roleOf(mid) === "assistant") {
+          appendText(rs, mid, delta);
+          void renderThrottled(rs);
+        }
         return;
       }
       if (part?.type === "text" && typeof part.text === "string" && roleOf(part.messageID) === "assistant") {
-        r.replace(part.text);
+        const mid = typeof part.messageID === "string" ? part.messageID : undefined;
+        if (mid) {
+          if (!rs.texts.has(mid)) rs.msgIds.push(mid);
+          rs.texts.set(mid, part.text);
+          void renderThrottled(rs);
+        }
+        return;
+      }
+      if (part?.type === "tool") {
+        const tool = part.tool ?? "tool";
+        const state_ = part.state;
+        const title = state_?.title ?? (state_?.input ? Object.keys(state_.input)[0] : undefined);
+        const line = `🔧 ${tool}${title ? `: ${title}` : ""}`.slice(0, 200);
+        const existing = toolMsg.get(sid);
+        if (existing === undefined) {
+          toolMsg.set(sid, -1);
+          void (async () => {
+            const sent = await bot.api.sendMessage(rs.chatId, line).catch(() => undefined);
+            if (sent) toolMsg.set(sid, sent.message_id);
+            else toolMsg.delete(sid);
+          })();
+        } else if (existing !== -1) {
+          void bot.api.editMessageText(rs.chatId, existing, line).catch(() => {});
+        }
+        return;
       }
       return;
     }
     if (e.type === "session.idle") {
       const sid = props["sessionID"];
       if (typeof sid !== "string") return;
-      const r = renderers.get(sid);
-      if (r) {
-        r.finalize();
-        renderers.delete(sid);
+      const rs = renderStates.get(sid);
+      if (rs) {
+        renderStates.delete(sid);
+        toolMsg.delete(sid);
+        void deliverFinal(rs);
       }
-      void bot.api.sendMessage(cfg.allowedUserIds[0], "done").catch(() => {});
       const thinking = reasoningBuf.get(sid);
       if (thinking && thinking.length > 0) {
         reasoningBuf.delete(sid);
         if (state.getOverride(cfg.allowedUserIds[0], "reasoning") === "on") {
           void (async () => {
-            for (const part of balancePre(chunk(thinking.join("")))) {
-              await bot.api.sendMessage(cfg.allowedUserIds[0], `\ud83e\udde0 thinking\n${mdToTelegramHtml(part)}`, { parse_mode: "HTML" }).catch(() => {});
+            const parts = balancePre(chunk(thinking.join("")).map(mdToTelegramHtml));
+            for (const part of parts) {
+              await bot.api.sendMessage(cfg.allowedUserIds[0], `\ud83e\udde0 thinking\n${part}`, { parse_mode: "HTML" }).catch(() => {});
             }
           })();
         }
@@ -391,11 +485,8 @@ export function createBot(
           ?? (props["error"] as { message?: string } | undefined)?.message
           ?? "unknown error");
       if (sid) {
-        const r = renderers.get(sid);
-        if (r) {
-          r.finalize();
-          renderers.delete(sid);
-        }
+        renderStates.delete(sid);
+        toolMsg.delete(sid);
       }
       void bot.api.sendMessage(cfg.allowedUserIds[0], `${escapeHtml(errMsg)}`).catch(() => {});
       return;

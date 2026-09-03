@@ -9,8 +9,9 @@ const server = Bun.serve({
     const url = new URL(req.url);
     let body: unknown = undefined;
     try { body = await req.json(); } catch {}
-    seen.push({ method: req.method, path: url.pathname, body });
-    if (url.pathname === "/project/current") return Response.json({ id: "p1" });
+  seen.push({ method: req.method, path: url.pathname, body });
+  if (url.pathname === "/project/current") return Response.json({ id: "p1" });
+  if (url.pathname === "/project") return Response.json([{ id: "p1", worktree: "C:/x" }]);
     if (url.pathname === "/session" && req.method === "GET")
       return Response.json([
         { id: "sess-a", title: "old title", time: { created: 1 } },
@@ -213,5 +214,11 @@ describe("OpencodeClient", () => {
     const call = seen.find((c) => c.path === "/session/sess-a" && c.method !== "GET");
     expect(call).toBeDefined();
     expect((call!.body as { title?: string }).title).toBe("renamed!");
+  });
+
+  test("listProjects returns worktree list", async () => {
+    const rows = await makeClient().listProjects();
+    expect(rows).toEqual([{ id: "p1", worktree: "C:/x" }]);
+    expect(seen.some((c) => c.method === "GET" && c.path === "/project")).toBe(true);
   });
 });

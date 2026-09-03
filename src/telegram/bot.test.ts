@@ -46,6 +46,7 @@ function makeClient(): OcApi & { calls: string[] } {
     listModels: async () => { calls.push("listModels"); return [{ providerID: "anthropic", modelID: "claude-sonnet-4" }]; },
     listAgents: async () => { calls.push("listAgents"); return ["build", "plan"]; },
     listSessions: async (d) => { calls.push(`listSessions:${d}`); return [{ id: "sess-a", title: "old title" }, { id: "sess-b", title: "second" }]; },
+    listProjects: async () => { calls.push("listProjects"); return [{ id: "p1", worktree: "C:/x" }]; },
     renameSession: async (sid, t) => { calls.push(`rename:${sid}:${t}`); },
     replyPermission: async (s, p, r) => { calls.push(`perm:${s}:${p}:${r}`); },
   };
@@ -135,18 +136,21 @@ describe("bot gate", () => {
 });
 
 describe("bot prompt relay", () => {
-  test("plain text creates session, streams deltas, finalizes on idle", async () => {
+  test("plain text creates session, streams deltas, delivers full answer on idle", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "fix the bug"));
     expect(ctx.client.calls.some((c) => c.startsWith("createSession:C:/code/web"))).toBe(true);
     expect(ctx.client.calls.some((c) => c.startsWith("prompt:sess-1:fix the bug"))).toBe(true);
-    expect(sent.some((s) => JSON.stringify(s.args).includes("working on web"))).toBe(true);
+    expect(sent.some((s) => JSON.stringify(s.args).includes("thinking"))).toBe(true);
 
-    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text" }, delta: "hello " } });
-    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text" }, delta: "world" } });
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text", messageID: "msg_a1" }, delta: "hello " } });
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { part: { sessionID: "sess-1", type: "text", messageID: "msg_a1" }, delta: "world" } });
     expect(sent.filter((s) => s.method === "editMessageText").length).toBeGreaterThanOrEqual(1);
     ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
-    expect(sent.some((s) => JSON.stringify(s.args).includes("done"))).toBe(true);
+    const final = sent.find((s) => s.method === "editMessageText" && JSON.stringify(s.args).includes("hello world"));
+    expect(final).toBeDefined();
+    expect(sent.some((s) => s.method === "sendMessage" && JSON.stringify(s.args).includes("done"))).toBe(false);
   });
 
   test("model and agent overrides parsed into prompt opts", async () => {
@@ -183,7 +187,7 @@ describe("bot commands", () => {
     ctx.state.setPairing(111);
     ctx.state.setOverride(111, "thinking", "high");
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/status"));
-    const msg = sent.find((s) => JSON.stringify(s.args).includes("project: web"));
+    const msg = sent.find((s) => JSON.stringify(s.args).includes("directory: C:/code/web"));
     expect(msg).toBeDefined();
     expect(JSON.stringify(msg!.args)).toContain("thinking: high");
     expect(JSON.stringify(msg!.args)).toContain("opencode: up");
@@ -199,14 +203,14 @@ describe("bot commands", () => {
 
   test("/diff formats changes", async () => {
     ctx.state.setPairing(111);
-    ctx.state.setSession(111, "web", "sess-1");
+    ctx.state.setSession(111, "C:/code/web", "sess-1");
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/diff"));
     expect(sent.some((s) => JSON.stringify(s.args).includes("+2/-1 a.ts"))).toBe(true);
   });
 
   test("/stop aborts current session", async () => {
     ctx.state.setPairing(111);
-    ctx.state.setSession(111, "web", "sess-1");
+    ctx.state.setSession(111, "C:/code/web", "sess-1");
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/stop"));
     expect(ctx.client.calls.some((c) => c === "abort:sess-1")).toBe(true);
   });
@@ -214,7 +218,7 @@ describe("bot commands", () => {
   test("/new creates fresh session", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/new"));
-    expect(ctx.state.getSession(111, "web")).toBe("sess-1");
+    expect(ctx.state.getSession(111, "C:/code/web")).toBe("sess-1");
     expect(sent.some((s) => JSON.stringify(s.args).includes("created"))).toBe(true);
   });
 });
@@ -336,9 +340,10 @@ describe("bot streaming last mile (real opencode shape)", () => {
   test("message.part.updated with delta still appends (legacy shape)", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a9", role: "assistant" } } } as never);
     ctx.bundle.handleEvent({
       type: "message.part.updated",
-      properties: { part: { sessionID: "sess-1", type: "text" }, delta: "hello " },
+      properties: { part: { sessionID: "sess-1", type: "text", messageID: "msg_a9" }, delta: "hello " },
     });
     expect(sent.some((s) => s.method === "editMessageText")).toBe(true);
   });
@@ -377,16 +382,16 @@ describe("session browser", () => {
     expect(sent.some((s) => JSON.stringify(s.args).includes("no sessions yet"))).toBe(true);
   });
 
-  test("sessuse makes the tapped session active for the project", async () => {
+  test("sessuse makes the tapped session active for the directory", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(cbUpdate("sessuse:sess-b"));
-    expect(ctx.state.getSession(111, "web")).toBe("sess-b");
+    expect(ctx.state.getSession(111, "C:/code/web")).toBe("sess-b");
     expect(sent.some((s) => JSON.stringify(s.args).includes("switched to session"))).toBe(true);
   });
 
   test("sessinfo shows session details", async () => {
     ctx.state.setPairing(111);
-    ctx.state.setSession(111, "web", "sess-a");
+    ctx.state.setSession(111, "C:/code/web", "sess-a");
     await ctx.bundle.bot.handleUpdate(cbUpdate("sessinfo:sess-a"));
     const msg = sent.find((s) => JSON.stringify(s.args).includes("sess-a"));
     expect(msg).toBeDefined();
@@ -423,7 +428,7 @@ describe("thinking chains", () => {
     ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "the bug" } });
     ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "text", delta: "fixed it" } });
     ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
-    const think = sent.find((s) => JSON.stringify(s.args).includes("thinking"));
+    const think = sent.find((s) => JSON.stringify(s.args).includes("let me think about"));
     expect(think).toBeDefined();
     expect(JSON.stringify(think!.args)).toContain("let me think about the bug");
   });
@@ -435,5 +440,65 @@ describe("thinking chains", () => {
     ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "secret thoughts" } });
     ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
     expect(sent.some((s) => JSON.stringify(s.args).includes("secret thoughts"))).toBe(false);
+  });
+});
+
+describe("full-answer delivery", () => {
+  test("multi-message turn delivers both messages joined on idle", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_m1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_m2", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "first part", sessionID: "sess-1", messageID: "msg_m1", id: "p1" } } });
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "second part", sessionID: "sess-1", messageID: "msg_m2", id: "p2" } } });
+    ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
+    const final = sent.find((s) => s.method === "editMessageText" && JSON.stringify(s.args).includes("first part") && JSON.stringify(s.args).includes("second part"));
+    expect(final).toBeDefined();
+  });
+
+  test("answer longer than 3900 chars is split into multiple messages", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    const long = "x".repeat(4500);
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_l1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: long, sessionID: "sess-1", messageID: "msg_l1", id: "p1" } } });
+    ctx.bundle.handleEvent({ type: "session.idle", properties: { sessionID: "sess-1" } });
+    await Bun.sleep(5);
+    const fullLen = sent
+      .filter((s) => s.method === "editMessageText" || s.method === "sendMessage")
+      .map((s) => {
+        const a = s.args as { text?: string };
+        return a.text?.length ?? 0;
+      })
+      .reduce((acc, n) => acc + n, 0);
+    expect(fullLen).toBeGreaterThanOrEqual(4500);
+    const sendCount = sent.filter((s) => s.method === "sendMessage" && (s.args as { text?: string }).text?.includes("xxx")).length;
+    expect(sendCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test("tool part shows status line with tool name and file title, never content", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "sess-1",
+        part: { type: "tool", tool: "edit", sessionID: "sess-1", callID: "c1", state: { status: "completed", title: "src/main.ts", input: { path: "src/main.ts" }, output: "SHOULD NOT APPEAR" } },
+      },
+    });
+    const toolLine = sent.find((s) => JSON.stringify(s.args).includes("🔧 edit: src/main.ts"));
+    expect(toolLine).toBeDefined();
+    expect(sent.some((s) => JSON.stringify(s.args).includes("SHOULD NOT APPEAR"))).toBe(false);
+  });
+
+  test("/project lists worktrees and pdir callback stores workdir override", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("C:/x"));
+    expect(kbMsg).toBeDefined();
+    expect(JSON.stringify(kbMsg!.args)).toContain("pdir:");
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:C%3A%2Fx"));
+    expect(ctx.state.getOverride(111, "workdir")).toBe("C:/x");
+    expect(ctx.client.calls.some((c) => c === "listProjects")).toBe(true);
   });
 });
