@@ -41,6 +41,11 @@ export function createBot(
   registerApprovalHandlers(bot, approvals, client);
 
   const renderers = new Map<string, StreamRenderer>();
+  const roles = new Map<string, string>();
+
+  function roleOf(messageId: unknown): string | undefined {
+    return typeof messageId === "string" ? roles.get(messageId) : undefined;
+  }
 
   function parseModel(v: string | undefined): { providerID: string; modelID: string } | undefined {
     if (!v) return undefined;
@@ -246,9 +251,26 @@ export function createBot(
 
   const handleEvent = (e: OcEvent): void => {
     const props = (e.properties ?? {}) as Record<string, unknown>;
+    if (e.type === "message.updated") {
+      const info = props["info"] as { id?: unknown; role?: unknown } | undefined;
+      if (info && typeof info.id === "string" && typeof info.role === "string") {
+        roles.set(info.id, info.role);
+      }
+      return;
+    }
+    if (e.type === "message.part.delta") {
+      const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : undefined;
+      if (!sid) return;
+      if (props["field"] !== "text") return;
+      if (roleOf(props["messageID"]) !== "assistant") return;
+      const delta = props["delta"];
+      if (typeof delta !== "string" || delta.length === 0) return;
+      renderers.get(sid)?.push(delta);
+      return;
+    }
     if (e.type === "message.part.updated") {
       const part = props["part"] as
-        | { sessionID?: string; type?: string; text?: string }
+        | { sessionID?: string; type?: string; text?: string; messageID?: unknown }
         | undefined;
       const delta = props["delta"];
       const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : part?.sessionID;
@@ -259,7 +281,7 @@ export function createBot(
         r.push(delta);
         return;
       }
-      if (part?.type === "text" && typeof part.text === "string") {
+      if (part?.type === "text" && typeof part.text === "string" && roleOf(part.messageID) === "assistant") {
         r.replace(part.text);
       }
       return;

@@ -266,15 +266,51 @@ describe("bot resilience", () => {  test("relay replies with error instead of cr
   });
 });
 
+describe("echo protection + live deltas (v1.18.6 shape)", () => {
+  test("user text part.updated does NOT render into the stream", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "what model are u?"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_u1", role: "user" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "what model are u?", sessionID: "sess-1", messageID: "msg_u1", id: "p1" } } });
+    expect(sent.filter((s) => s.method === "editMessageText").length).toBe(0);
+  });
+
+  test("unknown-messageID text part.updated is dropped (echo without role info)", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "hi"));
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "echo echo", sessionID: "sess-1", messageID: "msg_unknown", id: "p9" } } });
+    expect(sent.filter((s) => s.method === "editMessageText").length).toBe(0);
+  });
+
+  test("assistant part.delta streams into the placeholder", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "hi"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", partID: "p2", field: "text", delta: "I am Nemotron" } });
+    expect(sent.some((s) => s.method === "editMessageText" && JSON.stringify(s.args).includes("I am Nemotron"))).toBe(true);
+  });
+
+  test("reasoning deltas ignored; assistant snapshot replaces text", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "hi"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_a1", role: "assistant" } } } as never);
+    ctx.bundle.handleEvent({ type: "message.part.delta", properties: { sessionID: "sess-1", messageID: "msg_a1", field: "reasoning", delta: "thinking..." } });
+    expect(sent.filter((s) => s.method === "editMessageText").length).toBe(0);
+    ctx.bundle.handleEvent({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "I am Nemotron by NVIDIA", sessionID: "sess-1", messageID: "msg_a1", id: "p2" } } });
+    expect(sent.some((s) => s.method === "editMessageText" && JSON.stringify(s.args).includes("I am Nemotron by NVIDIA"))).toBe(true);
+  });
+});
+
 describe("bot streaming last mile (real opencode shape)", () => {
   test("message.part.updated without delta renders part.text (real v1.18.6 shape)", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "what model are u"));
+    ctx.bundle.handleEvent({ type: "message.updated", properties: { info: { id: "msg_m1", role: "assistant" } } } as never);
     ctx.bundle.handleEvent({
       type: "message.part.updated",
       properties: {
         sessionID: "sess-1",
-        part: { type: "text", text: "I am Muse Spark 1.2, built by Meta.", sessionID: "sess-1" },
+        part: { type: "text", text: "I am Muse Spark 1.2, built by Meta.", sessionID: "sess-1", messageID: "msg_m1", id: "p1" },
       },
     });
     const edit = sent.find((s) => s.method === "editMessageText");
