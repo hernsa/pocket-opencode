@@ -35,6 +35,14 @@ export class StreamRenderer {
     if (ready) this.flush();
   }
 
+  replace(text: string): void {
+    if (this.done) return;
+    this.buf = text;
+    const elapsed = this.now() - this.lastEdit;
+    const ready = this.firstEdit ? this.buf.length > 0 : elapsed >= this.intervalMs;
+    if (ready) this.flush();
+  }
+
   finalize(): void {
     if (this.done) return;
     this.done = true;

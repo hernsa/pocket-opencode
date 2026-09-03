@@ -247,10 +247,21 @@ export function createBot(
   const handleEvent = (e: OcEvent): void => {
     const props = (e.properties ?? {}) as Record<string, unknown>;
     if (e.type === "message.part.updated") {
-      const part = props["part"] as { sessionID?: string } | undefined;
+      const part = props["part"] as
+        | { sessionID?: string; type?: string; text?: string }
+        | undefined;
       const delta = props["delta"];
-      if (!part?.sessionID || typeof delta !== "string" || delta.length === 0) return;
-      renderers.get(part.sessionID)?.push(delta);
+      const sid = typeof props["sessionID"] === "string" ? props["sessionID"] : part?.sessionID;
+      if (!sid) return;
+      const r = renderers.get(sid);
+      if (!r) return;
+      if (typeof delta === "string" && delta.length > 0) {
+        r.push(delta);
+        return;
+      }
+      if (part?.type === "text" && typeof part.text === "string") {
+        r.replace(part.text);
+      }
       return;
     }
     if (e.type === "session.idle") {

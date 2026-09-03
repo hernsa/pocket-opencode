@@ -265,3 +265,46 @@ describe("bot resilience", () => {  test("relay replies with error instead of cr
     expect(sent.some((s) => JSON.stringify(s.args).includes("could not reach opencode"))).toBe(true);
   });
 });
+
+describe("bot streaming last mile (real opencode shape)", () => {
+  test("message.part.updated without delta renders part.text (real v1.18.6 shape)", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "what model are u"));
+    ctx.bundle.handleEvent({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "sess-1",
+        part: { type: "text", text: "I am Muse Spark 1.2, built by Meta.", sessionID: "sess-1" },
+      },
+    });
+    const edit = sent.find((s) => s.method === "editMessageText");
+    expect(edit).toBeDefined();
+    expect(JSON.stringify(edit!.args)).toContain("Muse Spark");
+  });
+
+  test("message.part.updated with delta still appends (legacy shape)", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({
+      type: "message.part.updated",
+      properties: { part: { sessionID: "sess-1", type: "text" }, delta: "hello " },
+    });
+    expect(sent.some((s) => s.method === "editMessageText")).toBe(true);
+  });
+
+  test("non-text parts (reasoning/step-start) do not render", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    const before = sent.filter((s) => s.method === "editMessageText").length;
+    ctx.bundle.handleEvent({
+      type: "message.part.updated",
+      properties: { sessionID: "sess-1", part: { type: "reasoning", text: "thinking..." } },
+    });
+    ctx.bundle.handleEvent({
+      type: "message.part.updated",
+      properties: { sessionID: "sess-1", part: { type: "step-start" } },
+    });
+    const after = sent.filter((s) => s.method === "editMessageText").length;
+    expect(after).toBe(before);
+  });
+});

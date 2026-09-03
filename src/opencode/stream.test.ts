@@ -61,6 +61,28 @@ describe("StreamRenderer", () => {
     r.finalize();
     expect(edits[edits.length - 1]).toBe("…" + "z".repeat(49));
   });
+
+  test("replace sets full text and edits immediately on first call", () => {
+    const { r, edits } = makeRenderer();
+    r.replace("hello world");
+    expect(edits).toEqual(["hello world"]);
+  });
+
+  test("later replaces emit latest snapshot after interval", () => {
+    const { r, edits, tick } = makeRenderer();
+    r.replace("one");
+    tick(1300);
+    r.replace("one two");
+    expect(edits).toEqual(["one", "one two"]);
+  });
+
+  test("push after replace appends", () => {
+    const { r, edits, tick } = makeRenderer();
+    r.replace("hel");
+    tick(1300);
+    r.push("lo");
+    expect(edits).toEqual(["hel", "hello"]);
+  });
 });
 
 describe("subscribeEvents", () => {
