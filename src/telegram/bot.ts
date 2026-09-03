@@ -117,9 +117,20 @@ export function createBot(
   bot.command("model", async (ctx) => {
     const models = await client.listModels();
     if (models.length === 0) return void reply(ctx, "no models found");
+    const providers = [...new Set(models.map((m) => m.providerID))];
     const kb = new InlineKeyboard();
-    for (const m of models.slice(0, 30)) kb.text(`${m.providerID}/${m.modelID}`, `model:${m.providerID}/${m.modelID}`).row();
-    await ctx.reply("Pick a model:", { reply_markup: kb });
+    for (const pid of providers) kb.text(pid, `prov:${pid}`).row();
+    await ctx.reply("Pick a provider:", { reply_markup: kb });
+  });
+
+  bot.callbackQuery(/^prov:(.+)$/, async (ctx) => {
+    const pid = ctx.match[1];
+    const models = (await client.listModels()).filter((m) => m.providerID === pid);
+    if (models.length === 0) return void reply(ctx, `no models for ${escapeHtml(pid)}`);
+    const kb = new InlineKeyboard();
+    for (const m of models) kb.text(`${m.providerID}/${m.modelID}`, `model:${m.providerID}/${m.modelID}`).row();
+    await ctx.answerCallbackQuery();
+    await ctx.reply(`Models for ${escapeHtml(pid)}:`, { reply_markup: kb });
   });
 
   bot.command("agent", async (ctx) => {

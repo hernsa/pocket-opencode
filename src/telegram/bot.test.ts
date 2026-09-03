@@ -204,8 +204,40 @@ describe("bot commands", () => {
   });
 });
 
-describe("bot resilience", () => {
-  test("relay replies with error instead of crashing when createSession fails", async () => {
+describe("bot model picker", () => {
+  test("/model shows one button per provider, then that provider's models", async () => {
+    ctx.state.setPairing(111);
+    ctx.client.listModels = async () => [
+      { providerID: "openai", modelID: "gpt-5" },
+      { providerID: "openai", modelID: "gpt-4o" },
+      { providerID: "chatbai", modelID: "glm-5.3-flash" },
+    ];
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/model"));
+    const kbMsg = sent.find((s) => s.method === "sendMessage" && JSON.stringify(s.args).includes("Pick a provider"));
+    expect(kbMsg).toBeDefined();
+    const kb = JSON.stringify(kbMsg!.args);
+    expect(kb).toContain("openai");
+    expect(kb).toContain("chatbai");
+    expect(kb).not.toContain("gpt-5");
+
+    const cb: Update = {
+      update_id: 9,
+      callback_query: {
+        id: "c1",
+        from: { id: 111, is_bot: false, first_name: "T" } as never,
+        data: "prov:openai",
+        chat_instance: "ci",
+        message: { message_id: 777, date: 0, chat: { id: 111, type: "private" }, from: { id: 42, is_bot: true, first_name: "B" } } as never,
+      },
+    } as unknown as Update;
+    await ctx.bundle.bot.handleUpdate(cb);
+    const modelsMsg = sent.filter((s) => s.method === "sendMessage" || s.method === "editMessageText").find((s) => JSON.stringify(s.args).includes("openai/gpt-5"));
+    expect(modelsMsg).toBeDefined();
+    expect(JSON.stringify(modelsMsg!.args)).toContain("openai/gpt-4o");
+  });
+});
+
+describe("bot resilience", () => {  test("relay replies with error instead of crashing when createSession fails", async () => {
     const client = makeClient();
     client.createSession = async () => { throw new Error("opencode api error: HTTP 401"); };
     const state = makeState();
