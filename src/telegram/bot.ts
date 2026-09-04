@@ -5,6 +5,7 @@ import type { StateStore } from "../state";
 import { escapeHtml, chunk, mdToTelegramHtml, balancePre } from "./format";
 import type { OcEvent } from "../opencode/stream";
 import type { PromptOpts } from "../opencode/client";
+import { readDesktopProjects } from "../opencode/localdirs";
 import { ApprovalStore, registerApprovalHandlers } from "./approvals";
 
 export interface OcApi {
@@ -230,14 +231,21 @@ export function createBot(
 
   bot.command("project", async (ctx) => {
     const projects = await client.listProjects().catch(() => []);
-    const dirs = [...new Set([
-      ...state.listDirs(),
-      ...projects.map((p) => p.worktree),
-      ...cfg.projects.map((p) => p.path),
-    ].filter((d) => d && d !== "/"))];
-    if (dirs.length === 0) return void reply(ctx, "no projects known — send a full folder path to add one");
+    const desktop = readDesktopProjects();
+    const dirs = [...new Map(
+      [
+        ...state.listDirs(),
+        ...projects.map((p) => p.worktree),
+        ...desktop.map((d) => d.worktree),
+        ...cfg.projects.map((p) => p.path),
+      ]
+        .filter((d) => d && d !== "/")
+        .map((d) => d.replace(/\\/g, "/"))
+        .map((d) => [d.toLowerCase(), d] as const)
+    ).values()];
+    if (dirs.length === 0) return void reply(ctx, "no projects known - send a full folder path to add one");
     const kb = new InlineKeyboard();
-    for (const dir of dirs.slice(0, 20)) {
+    for (const dir of dirs.slice(0, 25)) {
       const label = dir.split("/").filter(Boolean).pop() ?? dir;
       kb.text(label, `pdir:${encodeURIComponent(dir)}`).row();
     }
