@@ -12,6 +12,8 @@ export interface StateStore {
   getOverride(userId: number, key: OverrideKey): string | undefined;
   setOverride(userId: number, key: OverrideKey, value: string): void;
   clearOverride(userId: number, key: OverrideKey): void;
+  addDir(path: string): void;
+  listDirs(): string[];
   close(): void;
 }
 
@@ -22,6 +24,7 @@ export function openState(dbPath: string): StateStore {
     CREATE TABLE IF NOT EXISTS active_project (user_id INTEGER PRIMARY KEY, project TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS session (user_id INTEGER NOT NULL, project TEXT NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY (user_id, project));
     CREATE TABLE IF NOT EXISTS overrides (user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (user_id, key));
+    CREATE TABLE IF NOT EXISTS dirs (path TEXT PRIMARY KEY, added_at INTEGER NOT NULL);
   `);
 
   const qPair = db.query<{ chat_id: number }, [number]>("SELECT chat_id FROM pairing WHERE chat_id = ?");
@@ -33,6 +36,8 @@ export function openState(dbPath: string): StateStore {
   const qOvr = db.query<{ value: string }, [number, string]>("SELECT value FROM overrides WHERE user_id = ? AND key = ?");
   const iOvr = db.prepare("INSERT OR REPLACE INTO overrides (user_id, key, value) VALUES (?, ?, ?)");
   const dOvr = db.prepare("DELETE FROM overrides WHERE user_id = ? AND key = ?");
+  const iDir = db.prepare("INSERT OR IGNORE INTO dirs (path, added_at) VALUES (?, ?)");
+  const qDirs = db.query<{ path: string }, []>("SELECT path FROM dirs ORDER BY added_at ASC");
 
   return {
     isPaired(chatId) {
@@ -64,6 +69,12 @@ export function openState(dbPath: string): StateStore {
     },
     clearOverride(userId, key) {
       dOvr.run(userId, key);
+    },
+    addDir(path) {
+      iDir.run(path, Date.now());
+    },
+    listDirs() {
+      return qDirs.all().map((r) => r.path);
     },
     close() {
       db.close();

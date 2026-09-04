@@ -1,4 +1,5 @@
 import { Bot, type Context, InlineKeyboard } from "grammy";
+import { existsSync } from "node:fs";
 import type { AppConfig } from "../config";
 import type { StateStore } from "../state";
 import { escapeHtml, chunk, mdToTelegramHtml, balancePre } from "./format";
@@ -229,21 +230,22 @@ export function createBot(
 
   bot.command("project", async (ctx) => {
     const projects = await client.listProjects().catch(() => []);
-    const dirs = [...new Set([...projects.map((p) => p.worktree), ...cfg.projects.map((p) => p.path)])];
-    if (dirs.length === 0) return void reply(ctx, "no projects known to opencode");
+    const dirs = [...new Set([
+      ...state.listDirs(),
+      ...projects.map((p) => p.worktree),
+      ...cfg.projects.map((p) => p.path),
+    ].filter((d) => d && d !== "/"))];
+    if (dirs.length === 0) return void reply(ctx, "no projects known — send a full folder path to add one");
     const kb = new InlineKeyboard();
     for (const dir of dirs.slice(0, 20)) {
       const label = dir.split("/").filter(Boolean).pop() ?? dir;
       kb.text(label, `pdir:${encodeURIComponent(dir)}`).row();
     }
-    await ctx.reply("Pick a project — browse its sessions or start a new one:", { reply_markup: kb });
+    await ctx.reply("Pick a project — or send a full folder path to add one:", { reply_markup: kb });
   });
 
-  bot.callbackQuery(/^pdir:(.+)$/, async (ctx) => {
-    const uid = ctx.from!.id;
-    const dir = decodeURIComponent(ctx.match[1]);
+  async function showProjectSessions(ctx: Context, uid: number, dir: string): Promise<void> {
     state.setOverride(uid, "workdir", dir);
-    await ctx.answerCallbackQuery();
     const sessions = await client.listSessions(dir).catch(() => []);
     const active = state.getSession(uid, dir);
     const kb = new InlineKeyboard();
@@ -251,8 +253,15 @@ export function createBot(
       const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
       kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
     }
-    kb.text("\u2795 new session", `pnew:${ctx.match[1]}`).row();
+    kb.text("\u2795 new session", `pnew:${encodeURIComponent(dir)}`).row();
     await ctx.reply(`Sessions in ${escapeHtml(dir)}:`, { reply_markup: kb });
+  }
+
+  bot.callbackQuery(/^pdir:(.+)$/, async (ctx) => {
+    const uid = ctx.from!.id;
+    const dir = decodeURIComponent(ctx.match[1]);
+    await ctx.answerCallbackQuery();
+    await showProjectSessions(ctx, uid, dir);
   });
 
   bot.callbackQuery(/^pnew:(.+)$/, async (ctx) => {
@@ -388,6 +397,16 @@ export function createBot(
       } catch (e) {
         await reply(ctx, `rename failed: ${escapeHtml((e as Error).message)}`);
       }
+      return;
+    }
+    if (/^[A-Za-z]:[\\/]/.test(text)) {
+      const norm = text.replace(/\\/g, "/");
+      if (!existsSync(norm)) {
+        await reply(ctx, `folder not found: ${escapeHtml(norm)}`);
+        return;
+      }
+      state.addDir(norm);
+      await showProjectSessions(ctx, uid, norm);
       return;
     }
     const dir = activeDirectory(ctx);

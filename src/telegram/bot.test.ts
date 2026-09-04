@@ -1,4 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Update } from "grammy/types";
 import { createBot, type OcApi } from "./bot";
 import type { StateStore, OverrideKey } from "../state";
@@ -19,6 +22,7 @@ function makeState(): StateStore {
   const active = new Map<number, string>();
   const sessions = new Map<string, string>();
   const overrides = new Map<string, string>();
+  const dirsArr: string[] = [];
   return {
     isPaired: (c) => pairs.has(c),
     setPairing: (c) => void pairs.add(c),
@@ -29,6 +33,8 @@ function makeState(): StateStore {
     getOverride: (u, k) => overrides.get(`${u}:${k as OverrideKey}`),
     setOverride: (u, k, v) => void overrides.set(`${u}:${k as OverrideKey}`, v),
     clearOverride: (u, k) => void overrides.delete(`${u}:${k as OverrideKey}`),
+    addDir: (p) => void dirsArr.push(p),
+    listDirs: () => [...dirsArr],
     close: () => {},
   };
 }
@@ -529,5 +535,31 @@ describe("full-answer delivery", () => {
     expect(s).toContain("project");
     expect(s).toContain("session");
     expect(s).toContain("reasoning");
+  });
+});
+
+describe("custom project dirs", () => {
+  test("/project includes persisted dirs", async () => {
+    ctx.state.setPairing(111);
+    ctx.state.addDir("C:/custom/proj");
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes(`pdir:${encodeURIComponent("C:/custom/proj")}`))).toBe(true);
+  });
+
+  test("full path message adds project and opens session view", async () => {
+    ctx.state.setPairing(111);
+    const real = mkdtempSync(join(tmpdir(), "poc-dir-")).replace(/\\/g, "/");
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, real));
+    expect(ctx.state.listDirs()).toContain(real);
+    expect(ctx.state.getOverride(111, "workdir")).toBe(real);
+    expect(sent.some((s) => JSON.stringify(s.args).includes("Sessions in"))).toBe(true);
+    expect(ctx.client.calls.some((c) => c.startsWith("prompt:"))).toBe(false);
+  });
+
+  test("nonexistent path rejected", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "C:\\no\\such"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes("folder not found"))).toBe(true);
+    expect(ctx.state.listDirs()).not.toContain("C:/no/such");
   });
 });

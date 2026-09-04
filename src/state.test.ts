@@ -58,4 +58,23 @@ describe("StateStore", () => {
     expect(s2.getOverride(55, "agent")).toBe("build");
     s2.close();
   });
+
+  test("dirs add/list deduped", () => {
+    expect(store.listDirs()).toEqual([]);
+    store.addDir("C:/code/web");
+    store.addDir("C:/code/api");
+    store.addDir("C:/code/web");
+    const dirs = store.listDirs();
+    expect(dirs).toContain("C:/code/web");
+    expect(dirs).toContain("C:/code/api");
+    expect(dirs.length).toBe(2);
+  });
+
+  test("dirs persist across reopen", () => {
+    store.addDir("C:/code/web");
+    store.close();
+    const s2 = openState(dbPath);
+    expect(s2.listDirs()).toEqual(["C:/code/web"]);
+    s2.close();
+  });
 });
