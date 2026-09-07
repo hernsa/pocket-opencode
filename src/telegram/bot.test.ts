@@ -500,33 +500,54 @@ describe("full-answer delivery", () => {
     expect(sent.some((s) => JSON.stringify(s.args).includes("SHOULD NOT APPEAR"))).toBe(false);
   });
 
-  test("/project lists worktrees and pdir callback stores workdir override", async () => {
+  test("/project lists worktrees with compact index callbacks", async () => {
     ctx.state.setPairing(111);
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
-    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("pdir:"));
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("pdir:0"));
     expect(kbMsg).toBeDefined();
-    expect(JSON.stringify(kbMsg!.args)).toContain(encodeURIComponent("C:/x"));
     expect(ctx.client.calls.some((c) => c === "listProjects")).toBe(true);
+    const kb = (kbMsg!.args as { reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } }).reply_markup.inline_keyboard.flat();
+    for (const b of kb) expect(b.callback_data.length).toBeLessThanOrEqual(64);
   });
 
-  test("pdir shows sessions in that project plus a new-session button", async () => {
+  test("pdir:0 opens the sessions view for the stored directory", async () => {
     ctx.state.setPairing(111);
-    await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:C%3A%2Fx"));
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:0"));
     expect(ctx.state.getOverride(111, "workdir")).toBe("C:/x");
     const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("Sessions in C:/x"));
     expect(kbMsg).toBeDefined();
     const kb = JSON.stringify(kbMsg!.args);
     expect(kb).toContain("old title");
-    expect(kb).toContain("pnew:C%3A%2Fx");
+    expect(kb).toContain("pnew:0");
   });
 
-  test("pnew creates a session in the chosen directory", async () => {
+  test("pnew:0 creates a session in the chosen directory", async () => {
     ctx.state.setPairing(111);
-    await ctx.bundle.bot.handleUpdate(cbUpdate("pnew:C%3A%2Fx"));
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pnew:0"));
     expect(ctx.client.calls.some((c) => c === "createSession:C:/x:")).toBe(true);
     expect(ctx.state.getSession(111, "C:/x")).toBe("sess-1");
     expect(ctx.state.getOverride(111, "workdir")).toBe("C:/x");
     expect(sent.some((s) => JSON.stringify(s.args).includes("new session"))).toBe(true);
+  });
+
+  test("very long worktree stays under Telegram 64-byte callback limit", async () => {
+    ctx.state.setPairing(111);
+    const longDir = "C:/x/" + "very-long-segment/".repeat(12) + "end";
+    ctx.client.listProjects = async () => [{ id: "p1", worktree: longDir }];
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
+    const kbMsg = sent.find((s) => JSON.stringify(s.args).includes("pdir:"));
+    expect(kbMsg).toBeDefined();
+    const kb = (kbMsg!.args as { reply_markup: { inline_keyboard: Array<Array<{ callback_data: string }>> } }).reply_markup.inline_keyboard.flat();
+    expect(kb.length).toBeGreaterThanOrEqual(1);
+    for (const b of kb) expect(b.callback_data.length).toBeLessThanOrEqual(64);
+  });
+
+  test("pdir with stale index tells the user to re-run /project", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:99"));
+    expect(sent.some((s) => JSON.stringify(s.args).includes("stale"))).toBe(true);
   });
 
   test("setMyCommands registers the slash-command menu", async () => {
@@ -543,7 +564,8 @@ describe("custom project dirs", () => {
     ctx.state.setPairing(111);
     ctx.state.addDir("C:/custom/proj");
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "/project"));
-    expect(sent.some((s) => JSON.stringify(s.args).includes(`pdir:${encodeURIComponent("C:/custom/proj")}`))).toBe(true);
+    await ctx.bundle.bot.handleUpdate(cbUpdate("pdir:0"));
+    expect(ctx.state.getOverride(111, "workdir")).toBe("C:/custom/proj");
   });
 
   test("full path message adds project and opens session view", async () => {

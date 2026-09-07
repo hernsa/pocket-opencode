@@ -73,6 +73,7 @@ export function createBot(
   const pendingRename = new Map<number, string>();
   const reasoningBuf = new Map<string, string[]>();
   const toolMsg = new Map<string, number>();
+  const lastDirs = new Map<number, string[]>();
 
   function joinTexts(rs: RenderState): string {
     return rs.msgIds.map((id) => rs.texts.get(id) ?? "").join("\n\n").trim();
@@ -244,10 +245,11 @@ export function createBot(
         .map((d) => [d.toLowerCase(), d] as const)
     ).values()];
     if (dirs.length === 0) return void reply(ctx, "no projects known - send a full folder path to add one");
+    lastDirs.set(ctx.from!.id, dirs.slice(0, 25));
     const kb = new InlineKeyboard();
-    for (const dir of dirs.slice(0, 25)) {
+    for (const [i, dir] of dirs.slice(0, 25).entries()) {
       const label = dir.split("/").filter(Boolean).pop() ?? dir;
-      kb.text(label, `pdir:${encodeURIComponent(dir)}`).row();
+      kb.text(label, `pdir:${i}`).row();
     }
     await ctx.reply("Pick a project — or send a full folder path to add one:", { reply_markup: kb });
   });
@@ -261,20 +263,30 @@ export function createBot(
       const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
       kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
     }
-    kb.text("\u2795 new session", `pnew:${encodeURIComponent(dir)}`).row();
+    const stored = lastDirs.get(uid) ?? [];
+    const idx = stored.findIndex((d) => d.toLowerCase() === dir.toLowerCase());
+    kb.text("\u2795 new session", `pnew:${idx >= 0 ? idx : encodeURIComponent(dir)}`).row();
     await ctx.reply(`Sessions in ${escapeHtml(dir)}:`, { reply_markup: kb });
   }
 
-  bot.callbackQuery(/^pdir:(.+)$/, async (ctx) => {
+  bot.callbackQuery(/^pdir:(\d+)$/, async (ctx) => {
     const uid = ctx.from!.id;
-    const dir = decodeURIComponent(ctx.match[1]);
+    const dir = lastDirs.get(uid)?.[Number(ctx.match[1])];
+    if (!dir) {
+      await ctx.answerCallbackQuery("stale list — run /project again");
+      return;
+    }
     await ctx.answerCallbackQuery();
     await showProjectSessions(ctx, uid, dir);
   });
 
-  bot.callbackQuery(/^pnew:(.+)$/, async (ctx) => {
+  bot.callbackQuery(/^pnew:(\d+)$/, async (ctx) => {
     const uid = ctx.from!.id;
-    const dir = decodeURIComponent(ctx.match[1]);
+    const dir = lastDirs.get(uid)?.[Number(ctx.match[1])];
+    if (!dir) {
+      await ctx.answerCallbackQuery("stale list — run /project again");
+      return;
+    }
     try {
       const id = await client.createSession(dir);
       state.setOverride(uid, "workdir", dir);
