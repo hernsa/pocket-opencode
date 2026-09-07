@@ -12,12 +12,21 @@ const server = Bun.serve({
   seen.push({ method: req.method, path: url.pathname, body });
   if (url.pathname === "/project/current") return Response.json({ id: "p1" });
   if (url.pathname === "/project") return Response.json([{ id: "p1", worktree: "C:/x" }]);
-    if (url.pathname === "/session" && req.method === "GET")
-      return Response.json([
+    if (url.pathname === "/session" && req.method === "GET") {
+      const dir = url.searchParams.get("directory") ?? "";
+      const base = [
         { id: "sess-a", title: "old title", time: { created: 1 } },
         { id: "sess-b", title: "second" },
         { nope: true },
-      ]);
+      ];
+      const extra =
+        dir === "C:/code/web"
+          ? [{ id: "sess-fwd", title: "forward" }]
+          : dir === "C:\\code\\web"
+            ? [{ id: "sess-back", title: "backward" }]
+            : [];
+      return Response.json([...base, ...extra]);
+    }
     if (url.pathname === "/session" && req.method === "POST") return Response.json({ id: "sess-1" });
     if (url.pathname === "/session/sess-a") return Response.json({ id: "sess-a", title: "renamed!" });
     if (url.pathname === "/session/sess-1/prompt_async") return new Response(null, { status: 204 });
@@ -201,7 +210,7 @@ describe("OpencodeClient", () => {
   });
 
   test("listSessions normalizes rows and drops malformed", async () => {
-    const rows = await makeClient().listSessions("C:/code/web");
+    const rows = await makeClient().listSessions();
     expect(rows).toEqual([
       { id: "sess-a", title: "old title" },
       { id: "sess-b", title: "second" },
@@ -214,6 +223,14 @@ describe("OpencodeClient", () => {
     const call = seen.find((c) => c.path === "/session/sess-a" && c.method !== "GET");
     expect(call).toBeDefined();
     expect((call!.body as { title?: string }).title).toBe("renamed!");
+  });
+
+  test("listSessions merges separator-variant queries", async () => {
+    const rows = await makeClient().listSessions("C:/code/web");
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain("sess-fwd");
+    expect(ids).toContain("sess-back");
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   test("listProjects returns worktree list", async () => {

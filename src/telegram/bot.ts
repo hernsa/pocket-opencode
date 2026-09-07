@@ -248,36 +248,58 @@ export function createBot(
     lastDirs.set(ctx.from!.id, dirs.slice(0, 25));
     const kb = new InlineKeyboard();
     for (const [i, dir] of dirs.slice(0, 25).entries()) {
-      const label = dir.split("/").filter(Boolean).pop() ?? dir;
-      kb.text(label, `pdir:${i}`).row();
+      kb.text(dir.length > 60 ? dir.slice(0, 57) + "..." : dir, `pdir:${i}`).row();
     }
     await ctx.reply("Pick a project — or send a full folder path to add one:", { reply_markup: kb });
   });
 
-  async function showProjectSessions(ctx: Context, uid: number, dir: string): Promise<void> {
+  const SESSION_PAGE_SIZE = 50;
+
+  async function showProjectSessions(ctx: Context, uid: number, dir: string, dirIdx: number, offset = 0): Promise<void> {
     state.setOverride(uid, "workdir", dir);
     const sessions = await client.listSessions(dir).catch(() => []);
+    if (sessions.length === 0) {
+      await reply(ctx, "no sessions yet");
+      return;
+    }
     const active = state.getSession(uid, dir);
+    const page = sessions.slice(offset, offset + SESSION_PAGE_SIZE);
     const kb = new InlineKeyboard();
-    for (const s of sessions.slice(0, 10)) {
+    for (const s of page) {
       const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
       kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
     }
-    const stored = lastDirs.get(uid) ?? [];
-    const idx = stored.findIndex((d) => d.toLowerCase() === dir.toLowerCase());
-    kb.text("\u2795 new session", `pnew:${idx >= 0 ? idx : encodeURIComponent(dir)}`).row();
-    await ctx.reply(`Sessions in ${escapeHtml(dir)}:`, { reply_markup: kb });
+    if (offset + SESSION_PAGE_SIZE < sessions.length) {
+      kb.text(`\u25b6 more sessions (${offset + SESSION_PAGE_SIZE}/${sessions.length})`, `sessp:${dirIdx}:${offset + SESSION_PAGE_SIZE}`).row();
+    }
+    kb.text("\u2795 new session", `pnew:${dirIdx >= 0 ? dirIdx : encodeURIComponent(dir)}`).row();
+    const pageNote = sessions.length > SESSION_PAGE_SIZE ? ` (${offset + 1}-${offset + page.length} of ${sessions.length})` : "";
+    await ctx.reply(`Sessions in ${escapeHtml(dir)}${pageNote}:`, { reply_markup: kb });
   }
 
   bot.callbackQuery(/^pdir:(\d+)$/, async (ctx) => {
     const uid = ctx.from!.id;
-    const dir = lastDirs.get(uid)?.[Number(ctx.match[1])];
+    const idx = Number(ctx.match[1]);
+    const dir = lastDirs.get(uid)?.[idx];
     if (!dir) {
       await ctx.answerCallbackQuery("stale list — run /project again");
       return;
     }
     await ctx.answerCallbackQuery();
-    await showProjectSessions(ctx, uid, dir);
+    await showProjectSessions(ctx, uid, dir, idx);
+  });
+
+  bot.callbackQuery(/^sessp:(\d+):(\d+)$/, async (ctx) => {
+    const uid = ctx.from!.id;
+    const idx = Number(ctx.match[1]);
+    const offset = Number(ctx.match[2]);
+    const dir = lastDirs.get(uid)?.[idx];
+    if (!dir) {
+      await ctx.answerCallbackQuery("stale list — run /project again");
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await showProjectSessions(ctx, uid, dir, idx, offset);
   });
 
   bot.callbackQuery(/^pnew:(\d+)$/, async (ctx) => {
@@ -333,15 +355,8 @@ export function createBot(
   bot.command("session", async (ctx) => {
     const uid = ctx.from!.id;
     const dir = activeDirectory(ctx);
-    const sessions = await client.listSessions(dir).catch(() => []);
-    if (sessions.length === 0) return void reply(ctx, "no sessions yet");
-    const active = state.getSession(uid, dir);
-    const kb = new InlineKeyboard();
-    for (const s of sessions.slice(0, 10)) {
-      const label = (s.title && s.title !== s.id ? s.title : s.id.slice(0, 8)).slice(0, 30);
-      kb.text(`${active === s.id ? "\u25cf " : ""}${label}`, `sess:${s.id}`).row();
-    }
-    await ctx.reply("Sessions:", { reply_markup: kb });
+    const idx = (lastDirs.get(uid) ?? []).findIndex((d) => d.toLowerCase() === dir.toLowerCase());
+    await showProjectSessions(ctx, uid, dir, idx);
   });
 
   bot.callbackQuery(/^sess:(.+)$/, async (ctx) => {
@@ -426,7 +441,7 @@ export function createBot(
         return;
       }
       state.addDir(norm);
-      await showProjectSessions(ctx, uid, norm);
+      await showProjectSessions(ctx, uid, norm, -1);
       return;
     }
     const dir = activeDirectory(ctx);

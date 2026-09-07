@@ -161,10 +161,33 @@ export class OpencodeClient {
     const rows = unwrap<Array<unknown>>(
       await this.client.session.list({ query: { directory } })
     );
-    return rows
-      .map((r) => r as { id?: string; title?: string })
-      .filter((r): r is { id: string; title?: string } => typeof r.id === "string" && r.id.length > 0)
-      .map((r) => ({ id: r.id, title: typeof r.title === "string" ? r.title : r.id }));
+    const out = new Map<string, { id: string; title: string }>();
+    for (const r of rows) {
+      const row = r as { id?: string; title?: string };
+      if (typeof row.id !== "string" || row.id.length === 0) continue;
+      if (out.has(row.id)) continue;
+      out.set(row.id, { id: row.id, title: typeof row.title === "string" ? row.title : row.id });
+    }
+    // opencode.db rows mix C:\ and C:/ separator forms; the API filter is
+    // exact-match, so query the flipped-separator variant too and merge.
+    if (directory && /[\\/]/.test(directory)) {
+      const alt = directory.includes("\\") ? directory.replace(/\\/g, "/") : directory.replace(/\//g, "\\");
+      if (alt !== directory) {
+        try {
+          const altRows = unwrap<Array<unknown>>(
+            await this.client.session.list({ query: { directory: alt } })
+          );
+          for (const r of altRows) {
+            const row = r as { id?: string; title?: string };
+            if (typeof row.id !== "string" || row.id.length === 0 || out.has(row.id)) continue;
+            out.set(row.id, { id: row.id, title: typeof row.title === "string" ? row.title : row.id });
+          }
+        } catch {
+          // alt-separator query failed — forward-slash results still valid
+        }
+      }
+    }
+    return [...out.values()];
   }
 
   async listProjects(): Promise<Array<{ id: string; worktree: string }>> {
