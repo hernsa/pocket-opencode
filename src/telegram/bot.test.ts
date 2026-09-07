@@ -189,6 +189,27 @@ describe("bot prompt relay", () => {
     });
     expect(sent.some((s) => JSON.stringify(s.args).includes("pre-consume quota failed"))).toBe(true);
   });
+
+  test("session.error renders sql dumps as friendly storage error", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    ctx.bundle.handleEvent({
+      type: "session.error",
+      properties: {
+        sessionID: "sess-1",
+        message:
+          'Failed query: insert into "part" ("id", "message_id") values (?, ?) on conflict do update set "data" = ?params: prt_abc123,msg_xyz',
+      },
+    });
+    const err = sent.find(
+      (s) => s.method === "sendMessage" && JSON.stringify(s.args).includes("storage error"),
+    );
+    expect(err).toBeDefined();
+    const raw = sent.find(
+      (s) => s.method === "sendMessage" && JSON.stringify(s.args).includes("prt_abc123"),
+    );
+    expect(raw).toBeUndefined();
+  });
 });
 
 describe("bot commands", () => {

@@ -2,7 +2,7 @@ import { Bot, type Context, InlineKeyboard } from "grammy";
 import { existsSync } from "node:fs";
 import type { AppConfig } from "../config";
 import type { StateStore } from "../state";
-import { escapeHtml, chunk, mdToTelegramHtml, balancePre } from "./format";
+import { escapeHtml, chunk, mdToTelegramHtml, balancePre, friendlyError } from "./format";
 import type { OcEvent } from "../opencode/stream";
 import type { PromptOpts } from "../opencode/client";
 import { readDesktopProjects } from "../opencode/localdirs";
@@ -184,7 +184,7 @@ export function createBot(
       state.setSession(uid, dir, id);
       await reply(ctx, `session ${escapeHtml(id.slice(0, 8))} created`);
     } catch (e) {
-      await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
+      await reply(ctx, `could not reach opencode: ${escapeHtml(friendlyError((e as Error).message))}`);
     }
   });
 
@@ -295,7 +295,7 @@ export function createBot(
       await reply(ctx, `new session ${escapeHtml(id.slice(0, 8))} in ${escapeHtml(dir)}`);
     } catch (e) {
       await ctx.answerCallbackQuery().catch(() => {});
-      await reply(ctx, `could not create session: ${escapeHtml((e as Error).message)}`);
+      await reply(ctx, `could not create session: ${escapeHtml(friendlyError((e as Error).message))}`);
     }
   });
 
@@ -415,7 +415,7 @@ export function createBot(
         await client.renameSession(id, text);
         await reply(ctx, `renamed to ${escapeHtml(text)}`);
       } catch (e) {
-        await reply(ctx, `rename failed: ${escapeHtml((e as Error).message)}`);
+        await reply(ctx, `rename failed: ${escapeHtml(friendlyError((e as Error).message))}`);
       }
       return;
     }
@@ -436,7 +436,7 @@ export function createBot(
         sid = await client.createSession(dir);
         state.setSession(uid, dir, sid);
       } catch (e) {
-        await reply(ctx, `could not reach opencode: ${escapeHtml((e as Error).message)}`);
+        await reply(ctx, `could not reach opencode: ${escapeHtml(friendlyError((e as Error).message))}`);
         return;
       }
     }
@@ -457,7 +457,7 @@ export function createBot(
     } catch (e) {
       renderStates.delete(sid);
       toolMsg.delete(sid);
-      await reply(ctx, `${escapeHtml((e as Error).message)}`);
+      await reply(ctx, `${escapeHtml(friendlyError((e as Error).message))}`);
     }
   });
 
@@ -570,7 +570,7 @@ export function createBot(
         renderStates.delete(sid);
         toolMsg.delete(sid);
       }
-      void bot.api.sendMessage(cfg.allowedUserIds[0], `${escapeHtml(errMsg)}`).catch(() => {});
+      void bot.api.sendMessage(cfg.allowedUserIds[0], `⚠️ ${escapeHtml(friendlyError(errMsg))}`).catch(() => {});
       return;
     }
     if (e.type === "permission.updated") {

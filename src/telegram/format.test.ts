@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { chunk, escapeHtml, mdToTelegramHtml, balancePre } from "./format";
+import { chunk, escapeHtml, mdToTelegramHtml, balancePre, friendlyError } from "./format";
 
 describe("chunk", () => {
   test("short text passes through", () => {
@@ -64,6 +64,43 @@ describe("mdToTelegramHtml", () => {
 
   test("plain text passes through escaped only", () => {
     expect(mdToTelegramHtml("a & b")).toBe("a &amp; b");
+  });
+});
+
+describe("friendlyError", () => {
+  const sqlDump =
+    'Failed query: insert into "part" ("id", "message_id", "session_id", "time_created", "time_updated", "data") values (?, ?, ?, ?, ?, ?) on conflict ("part"."id") do update set "time_updated" = ?, "data" = ?params: prt_07ca0ae3e001pFKx6qXISZE1z0,msg_07c9e9547001p70xKSnqV03dCm,ses_f91c973a9ffedxx4QlB7rX5snR,1788797300286,1788797300290,{"type":"step-start"},1788797300290,{"type":"step-start"}';
+
+  test("sql/query failures become a friendly line", () => {
+    const out = friendlyError(sqlDump);
+    expect(out).not.toContain("insert into");
+    expect(out).not.toContain("prt_");
+    expect(out).toContain("storage");
+  });
+
+  test("quota / 403 shaped with hint", () => {
+    const out = friendlyError("pre-consume quota failed (403)");
+    expect(out).toContain("quota");
+    expect(out.toLowerCase()).toContain("model");
+  });
+
+  test("auth / 401 shaped with hint", () => {
+    const out = friendlyError("401 Unauthorized");
+    expect(out.toLowerCase()).toContain("unauthorized");
+  });
+
+  test("short human message passes through", () => {
+    expect(friendlyError("boom")).toBe("boom");
+  });
+
+  test("long message is truncated", () => {
+    const out = friendlyError("x".repeat(500));
+    expect(out.length).toBeLessThanOrEqual(320);
+  });
+
+  test("output contains no raw html-dangerous chars", () => {
+    const out = friendlyError(sqlDump);
+    expect(out).not.toMatch(/[<>&"']/);
   });
 });
 

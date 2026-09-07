@@ -16,6 +16,30 @@ export function mdToTelegramHtml(text: string): string {
   return s;
 }
 
+const ERROR_LIMIT = 300;
+
+function stripHtmlChars(s: string): string {
+  return s.replace(/[<>&"']/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function friendlyError(raw: string): string {
+  const line = stripHtmlChars(raw.split("\n")[0] ?? "").trim() || "unknown error";
+  if (/failed query|insert into|select .* from|update .* set|sqlite/i.test(line)) {
+    return "generation failed — opencode storage error. Try /new, and restart opencode if it keeps happening.";
+  }
+  if (/quota|insufficient|credit|billing/i.test(line)) {
+    return `${line} — this model has no remaining quota. Pick another with /model.`;
+  }
+  if (/401|unauthorized|invalid api key|authentication/i.test(line)) {
+    return `${line} — provider rejected the key. Check your credentials.`;
+  }
+  if (/429|rate limit|too many requests/i.test(line)) {
+    return `${line} — rate limited, wait a moment and retry.`;
+  }
+  if (line.length > ERROR_LIMIT) return `${line.slice(0, ERROR_LIMIT)}…`;
+  return line;
+}
+
 export function balancePre(chunks: string[]): string[] {
   const out: string[] = [];
   let inside = false;
