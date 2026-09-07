@@ -17,6 +17,8 @@ const server = Bun.serve({
       const base = [
         { id: "sess-a", title: "old title", time: { created: 1 } },
         { id: "sess-b", title: "second" },
+        { id: "sess-child", title: "child", parentID: "sess-a" },
+        { id: "sess-arch", title: "archived", time: { created: 2, archived: 9 } },
         { nope: true },
       ];
       const extra =
@@ -231,6 +233,8 @@ describe("OpencodeClient", () => {
     expect(ids).toContain("sess-fwd");
     expect(ids).toContain("sess-back");
     expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain("sess-child");
+    expect(ids).not.toContain("sess-arch");
   });
 
   test("listProjects returns worktree list", async () => {

@@ -163,9 +163,9 @@ export class OpencodeClient {
     );
     const out = new Map<string, { id: string; title: string }>();
     for (const r of rows) {
-      const row = r as { id?: string; title?: string };
-      if (typeof row.id !== "string" || row.id.length === 0) continue;
-      if (out.has(row.id)) continue;
+      const row = r as { id?: string; title?: string; parentID?: unknown; time?: { archived?: unknown } };
+      if (typeof row.id !== "string" || row.id.length === 0 || out.has(row.id)) continue;
+      if (row.parentID != null || row.time?.archived != null) continue;
       out.set(row.id, { id: row.id, title: typeof row.title === "string" ? row.title : row.id });
     }
     // opencode.db rows mix C:\ and C:/ separator forms; the API filter is
@@ -178,8 +178,9 @@ export class OpencodeClient {
             await this.client.session.list({ query: { directory: alt } })
           );
           for (const r of altRows) {
-            const row = r as { id?: string; title?: string };
+            const row = r as { id?: string; title?: string; parentID?: unknown; time?: { archived?: unknown } };
             if (typeof row.id !== "string" || row.id.length === 0 || out.has(row.id)) continue;
+            if (row.parentID != null || row.time?.archived != null) continue;
             out.set(row.id, { id: row.id, title: typeof row.title === "string" ? row.title : row.id });
           }
         } catch {
