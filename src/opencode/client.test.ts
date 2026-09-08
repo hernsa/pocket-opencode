@@ -175,6 +175,20 @@ describe("OpencodeClient", () => {
     expect(b.agent).toBe("build");
   });
 
+  test("prompt passes system prompt when provided", async () => {
+    await makeClient().prompt("sess-1", "hi", { system: "you are pocket" });
+    const call = seen.filter((c) => c.path === "/session/sess-1/prompt_async").pop();
+    const b = call!.body as { system?: string };
+    expect(b.system).toBe("you are pocket");
+  });
+
+  test("prompt omits system when not provided", async () => {
+    await makeClient().prompt("sess-1", "hi");
+    const call = seen.filter((c) => c.path === "/session/sess-1/prompt_async").pop();
+    const b = call!.body as { system?: string };
+    expect(b.system).toBeUndefined();
+  });
+
   test("abort and undo hit their endpoints", async () => {
     const c = makeClient();
     await c.abort("sess-1");

@@ -4,6 +4,7 @@ export interface PromptOpts {
   directory?: string;
   model?: { providerID: string; modelID: string };
   agent?: string;
+  system?: string;
 }
 
 export interface OcClientOpts {
@@ -100,6 +101,7 @@ export class OpencodeClient {
         parts: [{ type: "text", text }],
         model: opts?.model,
         agent: opts?.agent,
+        system: opts?.system,
       },
     });
   }

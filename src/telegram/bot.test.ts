@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Update } from "grammy/types";
 import { createBot, type OcApi } from "./bot";
+import type { PromptOpts } from "../opencode/client";
+import { POCKET_SYSTEM_PROMPT } from "../pocket-prompt";
 import type { StateStore, OverrideKey } from "../state";
 import type { AppConfig } from "../config";
 
@@ -39,13 +41,16 @@ function makeState(): StateStore {
   };
 }
 
-function makeClient(): OcApi & { calls: string[] } {
+function makeClient(): OcApi & { calls: string[]; lastPromptOpts: PromptOpts | undefined } {
   const calls: string[] = [];
+  const optsRef = { lastOpts: undefined as PromptOpts | undefined };
   return {
     calls,
     health: async () => { calls.push("health"); return true; },
     createSession: async (d, t) => { calls.push(`createSession:${d}:${t ?? ""}`); return "sess-1"; },
-    prompt: async (sid, text, o) => { calls.push(`prompt:${sid}:${text}:${o?.model?.providerID ?? ""}:${o?.agent ?? ""}`); },
+    prompt: async (sid, text, o) => { calls.push(`prompt:${sid}:${text}:${o?.model?.providerID ?? ""}:${o?.agent ?? ""}`); optsRef.lastOpts = o ? { ...o } : undefined; },
+    get lastPromptOpts() { return optsRef.lastOpts; },
+
     abort: async (sid) => { calls.push(`abort:${sid}`); },
     undo: async (sid) => { calls.push(`undo:${sid}`); },
     getDiff: async () => { calls.push("getDiff"); return [{ file: "a.ts", additions: 2, deletions: 1 }]; },
@@ -168,6 +173,12 @@ describe("bot prompt relay", () => {
     ctx.state.setOverride(111, "agent", "build");
     await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
     expect(ctx.client.calls.some((c) => c.includes("anthropic") && c.includes("build"))).toBe(true);
+  });
+
+  test("relay sends pocket-mode system prompt with every prompt", async () => {
+    ctx.state.setPairing(111);
+    await ctx.bundle.bot.handleUpdate(textUpdate(111, 111, "go"));
+    expect(ctx.client.lastPromptOpts?.system).toBe(POCKET_SYSTEM_PROMPT);
   });
 
   test("session.error finalizes and reports", async () => {

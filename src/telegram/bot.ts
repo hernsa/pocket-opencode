@@ -5,6 +5,7 @@ import type { StateStore } from "../state";
 import { escapeHtml, chunk, mdToTelegramHtml, balancePre, friendlyError } from "./format";
 import type { OcEvent } from "../opencode/stream";
 import type { PromptOpts } from "../opencode/client";
+import { POCKET_SYSTEM_PROMPT } from "../pocket-prompt";
 import { readDesktopProjects } from "../opencode/localdirs";
 import { ApprovalStore, registerApprovalHandlers } from "./approvals";
 
@@ -468,6 +469,7 @@ export function createBot(
         directory: dir,
         model: parseModel(state.getOverride(uid, "model")),
         agent: state.getOverride(uid, "agent"),
+        system: POCKET_SYSTEM_PROMPT,
       });
     } catch (e) {
       renderStates.delete(sid);
