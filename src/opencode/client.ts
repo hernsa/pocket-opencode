@@ -11,6 +11,8 @@ export interface OcClientOpts {
   port: number;
   spawner?: (cmdline: string[]) => void;
   auth?: { username: string; password: string };
+  findPortOwner?: (port: number) => { pid: number; image: string } | null;
+  killPid?: (pid: number) => void;
 }
 
 export function opencodeAuthHeaders(
@@ -34,10 +36,37 @@ function defaultSpawner(cmdline: string[]): void {
   Bun.spawn(cmdline, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
 }
 
+function defaultFindPortOwner(port: number): { pid: number; image: string } | null {
+  try {
+    const proc = Bun.spawnSync(["cmd", "/c", "netstat", "-ano", "-p", "TCP"]);
+    const out = proc.stdout.toString();
+    let pid: number | null = null;
+    for (const line of out.split("\n")) {
+      const m = line.match(/^\s*TCP\s+(\S+):(\d+)\s+\S+\s+\S+\s+(\d+)\s*$/i);
+      if (!m) continue;
+      if (Number(m[2]) !== port) continue;
+      pid = Number(m[3]);
+      break;
+    }
+    if (!pid) return null;
+    const tl = Bun.spawnSync(["cmd", "/c", "tasklist", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"]);
+    const im = tl.stdout.toString().trim().match(/^"([^"]+)"/);
+    return { pid, image: im ? im[1] : "unknown" };
+  } catch {
+    return null;
+  }
+}
+
+function defaultKillPid(pid: number): void {
+  process.kill(pid);
+}
+
 export class OpencodeClient {
   private readonly port: number;
   private readonly client: ReturnType<typeof createOpencodeClient>;
   private readonly spawner: (cmdline: string[]) => void;
+  private readonly findPortOwner: (port: number) => { pid: number; image: string } | null;
+  private readonly killPid: (pid: number) => void;
 
   constructor(opts: OcClientOpts) {
     this.port = opts.port;
@@ -56,22 +85,42 @@ export class OpencodeClient {
     }
     this.client = createOpencodeClient(cfg);
     this.spawner = opts.spawner ?? defaultSpawner;
+    this.findPortOwner = opts.findPortOwner ?? defaultFindPortOwner;
+    this.killPid = opts.killPid ?? defaultKillPid;
   }
 
-  async health(): Promise<boolean> {
+  private async healthState(): Promise<"ok" | "auth" | "down"> {
     try {
-      const r = (await this.client.project.current()) as { response?: { ok?: boolean } };
-      if (r && typeof r === "object" && r.response && typeof r.response.ok === "boolean") {
-        return r.response.ok;
+      const r = (await this.client.project.current()) as { response?: Response };
+      if (r && typeof r === "object" && r.response && typeof (r.response as Response).ok === "boolean") {
+        const res = r.response as Response;
+        if (res.ok) return "ok";
+        if (res.status === 401) return "auth";
+        return "down";
       }
-      return false;
+      return "down";
     } catch {
-      return false;
+      return "down";
     }
   }
 
+  async health(): Promise<boolean> {
+    return (await this.healthState()) === "ok";
+  }
+
   async ensureRunning(timeoutMs = 20000): Promise<void> {
-    if (await this.health()) return;
+    const state = await this.healthState();
+    if (state === "ok") return;
+    if (state === "auth") {
+      const owner = this.findPortOwner(this.port);
+      if (!owner) {
+        throw new Error(`opencode serve on port ${this.port} rejects our credentials and no process was found holding the port — free the port and retry`);
+      }
+      if (!/opencode/i.test(owner.image)) {
+        throw new Error(`port ${this.port} is held by ${owner.image} (pid ${owner.pid}), not opencode — refusing to kill it. Free the port and retry`);
+      }
+      this.killPid(owner.pid);
+    }
     this.spawner([
       "cmd", "/c", "opencode", "serve",
       `--port`, String(this.port),

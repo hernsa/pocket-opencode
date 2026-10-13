@@ -150,7 +150,7 @@ describe("OpencodeClient", () => {
 
   test("ensureRunning throws after timeout on dead port", async () => {
     let spawned = 0;
-    const dead = new OpencodeClient({ port: 1, spawner: () => { spawned++; } });
+    const dead = new OpencodeClient({ port: 1, spawner: () => { spawned++; }, findPortOwner: () => null });
     await expect(dead.ensureRunning(300)).rejects.toThrow(/did not come up/);
     expect(spawned).toBe(1);
   });
@@ -255,5 +255,58 @@ describe("OpencodeClient", () => {
     const rows = await makeClient().listProjects();
     expect(rows).toEqual([{ id: "p1", worktree: "C:/x" }]);
     expect(seen.some((c) => c.method === "GET" && c.path === "/project")).toBe(true);
+  });
+});
+
+describe("ensureRunning self-heal (auth mismatch)", () => {
+  test("kills stale opencode serve with wrong creds, spawns fresh, boots healthy", async () => {
+    const stale = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response("unauthorized", { status: 401, headers: { "www-authenticate": 'Basic realm="Secure Area"' } });
+      },
+    });
+    const port = stale.port!;
+    let healthy: { stop: (force?: boolean) => void } | undefined;
+    const killed: number[] = [];
+    let spawned = 0;
+    const c = new OpencodeClient({
+      port,
+      spawner: () => {
+        spawned++;
+        stale.stop(true);
+        healthy = Bun.serve({ port, fetch() { return Response.json({ id: "p1" }); } });
+      },
+      findPortOwner: () => ({ pid: 4242, image: "opencode.exe" }),
+      killPid: (pid) => { killed.push(pid); stale.stop(true); },
+    });
+    await c.ensureRunning(5000);
+    expect(killed).toEqual([4242]);
+    expect(spawned).toBe(1);
+    healthy?.stop(true);
+  }, 10000);
+
+  test("refuses to kill a foreign port owner", async () => {
+    let killed = 0;
+    let spawned = 0;
+    const c = new OpencodeClient({
+      port: authServer.port!,
+      spawner: () => { spawned++; },
+      findPortOwner: () => ({ pid: 7, image: "chrome.exe" }),
+      killPid: () => { killed++; },
+    });
+    await expect(c.ensureRunning(1000)).rejects.toThrow(/not opencode/i);
+    expect(killed).toBe(0);
+    expect(spawned).toBe(0);
+  });
+
+  test("throws clear error when 401 port has no visible owner", async () => {
+    const c = new OpencodeClient({
+      port: authServer.port!,
+      spawner: () => {},
+      findPortOwner: () => null,
+      killPid: () => {},
+    });
+    await expect(c.ensureRunning(300)).rejects.toThrow(/no process was found|credentials/i);
   });
 });
