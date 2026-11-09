@@ -1,13 +1,14 @@
 use axum::{
-    extract::{Path, State, WebSocketUpgrade},
-    http::{StatusCode},
+    extract::{Path, Request, State, WebSocketUpgrade},
+    http::{header, StatusCode},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::api_client::{ApiClient, Auth, PromptRequest};
 use crate::serve_manager::ServeManager;
@@ -17,19 +18,37 @@ use crate::serve_manager::ServeManager;
 pub struct AppState {
     pub manager: Arc<ServeManager>,
     pub api: ApiClient,
+    pub manager_token: Option<String>,
 }
 
 impl AppState {
-    pub fn new(port: u16, serve_binary: Vec<String>, auth: Auth) -> Self {
+    pub fn new(port: u16, serve_binary: Vec<String>, auth: Auth, manager_token: Option<String>) -> Self {
         Self {
             manager: Arc::new(ServeManager::new(port, serve_binary)),
             api: ApiClient::new(port, auth),
+            manager_token,
+        }
+    }
+
+    /// Ensure opencode serve is running (logs error but does not abort startup).
+    pub async fn ensure_running(&self) {
+        match self.manager.ensure_running().await {
+            Ok(()) => info!("opencode serve is healthy"),
+            Err(e) => error!("failed to start opencode serve: {}", e),
         }
     }
 }
 
 /// Build the axum router with all routes.
 pub fn serve_app(state: AppState) -> Router {
+    let token = state.manager_token.clone();
+
+    // Restrict CORS to same-origin (127.0.0.1) — never permissive on a control plane.
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin("http://127.0.0.1".parse::<axum::http::HeaderValue>().unwrap())
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+
     Router::new()
         .route("/health", get(health_handler))
         .route("/serve/health", get(serve_health_handler))
@@ -45,11 +64,25 @@ pub fn serve_app(state: AppState) -> Router {
         )
         .route("/models", get(models_handler))
         .route("/agents", get(agents_handler))
-        .layer(
-            tower_http::cors::CorsLayer::permissive()
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        )
+        // Bearer-token auth middleware (no-op when POCKET_MANAGER_TOKEN is unset)
+        .layer(middleware::from_fn(move |request: Request, next: middleware::Next| {
+            let token = token.clone();
+            async move {
+                if let Some(t) = &token {
+                    let expected = format!("Bearer {}", t);
+                    let auth = request
+                        .headers()
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok());
+                    if auth != Some(expected.as_str()) {
+                        warn!("manager API request rejected: missing or invalid bearer token");
+                        return Err(StatusCode::UNAUTHORIZED);
+                    }
+                }
+                Ok(next.run(request).await)
+            }
+        }))
+        .layer(cors)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
 }

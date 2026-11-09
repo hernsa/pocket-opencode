@@ -1,8 +1,6 @@
-use pocket_serve_manager::api_client::{ApiClient, Auth};
-use pocket_serve_manager::serve_manager::ServeManager;
+use pocket_serve_manager::api_client::Auth;
 use pocket_serve_manager::server::{AppState, serve_app};
-use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{info};
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
@@ -24,31 +22,24 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(4097);
 
+    // Shared secret for the manager API (required in production)
+    let manager_token = std::env::var("POCKET_MANAGER_TOKEN").ok();
+
     // Serve binary: try `opencode` from PATH, fall back to desktop CLI
     let serve_binary = std::env::var("POCKET_SERVE_BINARY")
         .ok()
         .map(|v| v.split_whitespace().map(String::from).collect::<Vec<_>>())
         .unwrap_or_else(default_serve_binary);
 
-    info!("opencode port={} manager port={} serve_binary={:?}", opencode_port, manager_port, serve_binary);
-
-    // Create the serve manager
-    let manager = Arc::new(ServeManager::new(opencode_port, serve_binary.clone()));
-    let api = ApiClient::new(opencode_port, Auth::from_env());
-
-    // Ensure opencode serve is running on startup
-    info!("ensuring opencode serve is running on port {}", opencode_port);
-    match manager.ensure_running().await {
-        Ok(()) => info!("opencode serve is healthy"),
-        Err(e) => error!("failed to start opencode serve: {}", e),
-    }
+    info!("opencode port={} manager port={} token_set={}", opencode_port, manager_port, manager_token.is_some());
 
     // Build the HTTP server app
-    let state = AppState { manager, api };
+    let state = AppState::new(opencode_port, serve_binary.clone(), Auth::from_env(), manager_token.clone());
+    state.ensure_running().await;
     let app = serve_app(state);
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", manager_port)).await?;
-    info!("manager HTTP server listening on {}", manager_port);
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", manager_port)).await?;
+    info!("manager HTTP server listening on 127.0.0.1:{}", manager_port);
 
     axum::serve(listener, app).await?;
     Ok(())
