@@ -5,3 +5,6 @@ config.json
 dist/
 .env
 *.log
+launch.vbs
+.opencode/
+rust/target/

@@ -9,16 +9,16 @@ const server = Bun.serve({
     const url = new URL(req.url);
     let body: unknown = undefined;
     try { body = await req.json(); } catch {}
-  seen.push({ method: req.method, path: url.pathname, body });
-  if (url.pathname === "/project/current") return Response.json({ id: "p1" });
-  if (url.pathname === "/project") return Response.json([{ id: "p1", worktree: "C:/x" }]);
-    if (url.pathname === "/session" && req.method === "GET") {
+    seen.push({ method: req.method, path: url.pathname, body });
+    if (url.pathname === "/api/info") return Response.json({ id: "p1", version: "2.0" });
+    if (url.pathname === "/api/project") return Response.json([{ id: "p1", worktree: "C:/x" }]);
+    if (url.pathname === "/api/session" && req.method === "GET") {
       const dir = url.searchParams.get("directory") ?? "";
       const base = [
-        { id: "sess-a", title: "old title", time: { created: 1 } },
+        { id: "sess-a", title: "old title" },
         { id: "sess-b", title: "second" },
-        { id: "sess-child", title: "child", parentID: "sess-a" },
-        { id: "sess-arch", title: "archived", time: { created: 2, archived: 9 } },
+        { id: "sess-child", title: "child", parent_id: "sess-a" },
+        { id: "sess-arch", title: "archived", archived: true },
         { nope: true },
       ];
       const extra =
@@ -29,32 +29,26 @@ const server = Bun.serve({
             : [];
       return Response.json([...base, ...extra]);
     }
-    if (url.pathname === "/session" && req.method === "POST") return Response.json({ id: "sess-1" });
-    if (url.pathname === "/session/sess-a") return Response.json({ id: "sess-a", title: "renamed!" });
-    if (url.pathname === "/session/sess-1/prompt_async") return new Response(null, { status: 204 });
-    if (url.pathname === "/session/sess-1/abort") return Response.json({ ok: true });
-    if (url.pathname === "/session/sess-1/revert") return Response.json({ ok: true });
-    if (url.pathname === "/session/sess-1/diff")
+    if (url.pathname === "/api/session" && req.method === "POST") return Response.json({ id: "sess-1" });
+    if (url.pathname === "/api/session/sess-a" && req.method === "PATCH") return Response.json({ id: "sess-a", title: "renamed!" });
+    if (url.pathname === "/api/session/sess-1/prompt" && req.method === "POST") return new Response(null, { status: 200 });
+    if (url.pathname === "/api/session/sess-1/interrupt" && req.method === "POST") return Response.json({ ok: true });
+    if (url.pathname === "/api/session/sess-1/revert/commit" && req.method === "POST") return Response.json({ ok: true });
+    if (url.pathname === "/api/session/sess-1/diff")
       return Response.json([
-        { file: "src/a.ts", before: "", after: "", additions: 12, deletions: 3 },
-        { file: "src/b.ts", before: "", after: "", additions: 0, deletions: 7 },
+        { file: "src/a.ts", additions: 12, deletions: 3 },
+        { file: "src/b.ts", additions: 0, deletions: 7 },
       ]);
-    if (url.pathname === "/config/providers")
+    if (url.pathname === "/api/model")
       return Response.json({
-        providers: [
-          { id: "opencode", models: { "nemotron-3-ultra-free": {}, "big-pickle": {} } },
-          { id: "chatbai", models: { "glm-5.3-flash": {} } },
+        models: [
+          { id: "nemotron-3-ultra-free", provider_id: "opencode" },
+          { id: "big-pickle", provider_id: "opencode" },
+          { id: "glm-5.3-flash", provider_id: "chatbai" },
         ],
       });
-    if (url.pathname === "/provider")
-      return Response.json({
-        all: [
-          { id: "anthropic", models: { "claude-sonnet-4": {}, "claude-opus-4": {} } },
-          { id: "openai", models: { "gpt-5": {} } },
-        ],
-      });
-    if (url.pathname === "/agent") return Response.json([{ name: "build" }, { name: "plan" }]);
-    if (url.pathname.startsWith("/session/sess-1/permissions/")) return Response.json({ ok: true });
+    if (url.pathname === "/api/agent") return Response.json({ agents: [{ id: "build", name: "build" }, { id: "plan", name: "plan" }] });
+    if (url.pathname.startsWith("/api/session/sess-1/permission/")) return Response.json({ ok: true });
     return new Response("not found", { status: 404 });
   },
 });
@@ -74,31 +68,23 @@ const authServer = Bun.serve({
     authSeen.push({ auth: req.headers.get("authorization"), path: url.pathname });
     const ok = req.headers.get("authorization") === expected;
     if (!ok) return new Response("unauthorized", { status: 401, headers: { "www-authenticate": 'Basic realm="Secure Area"' } });
-    if (url.pathname === "/project/current") return Response.json({ id: "p1" });
-    if (url.pathname === "/session" && req.method === "POST") return Response.json({ id: "sess-auth" });
+    if (url.pathname === "/api/info") return Response.json({ id: "p1" });
+    if (url.pathname === "/api/session" && req.method === "POST") return Response.json({ id: "sess-auth" });
     return new Response("nf", { status: 404 });
   },
 });
 
 afterAll(() => authServer.stop(true));
 
-const AUTH_ENV = {
-  OPENCODE_SERVER_USERNAME: "opencode",
-  OPENCODE_SERVER_PASSWORD: "7249abc4-ddfc-4a29-a474-b68bb65ccdcf",
-};
-
 const savedAuth: Record<string, string | undefined> = {};
 
 beforeEach(() => {
-  savedAuth.u = process.env.OPENCODE_SERVER_USERNAME;
-  savedAuth.p = process.env.OPENCODE_SERVER_PASSWORD;
-  delete process.env.OPENCODE_SERVER_USERNAME;
-  delete process.env.OPENCODE_SERVER_PASSWORD;
+  savedAuth.p = process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_PASSWORD;
 });
 
 afterEach(() => {
-  if (savedAuth.u !== undefined) process.env.OPENCODE_SERVER_USERNAME = savedAuth.u;
-  if (savedAuth.p !== undefined) process.env.OPENCODE_SERVER_PASSWORD = savedAuth.p;
+  if (savedAuth.p !== undefined) process.env.OPENCODE_PASSWORD = savedAuth.p;
 });
 
 describe("opencode auth", () => {
@@ -106,16 +92,14 @@ describe("opencode auth", () => {
     expect(opencodeAuthHeaders()).toEqual({});
   });
 
-  test("opencodeAuthHeaders builds Basic header from env", () => {
-    process.env.OPENCODE_SERVER_USERNAME = "opencode";
-    process.env.OPENCODE_SERVER_PASSWORD = "7249abc4-ddfc-4a29-a474-b68bb65ccdcf";
+  test("opencodeAuthHeaders builds Basic header from OPENCODE_PASSWORD", () => {
+    process.env.OPENCODE_PASSWORD = "7249abc4-ddfc-4a29-a474-b68bb65ccdcf";
     const h = opencodeAuthHeaders();
     expect(h["Authorization"]).toBe("Basic " + btoa("opencode:7249abc4-ddfc-4a29-a474-b68bb65ccdcf"));
   });
 
   test("client sends Basic auth header on requests", async () => {
-    process.env.OPENCODE_SERVER_USERNAME = AUTH_ENV.OPENCODE_SERVER_USERNAME;
-    process.env.OPENCODE_SERVER_PASSWORD = AUTH_ENV.OPENCODE_SERVER_PASSWORD;
+    process.env.OPENCODE_PASSWORD = "7249abc4-ddfc-4a29-a474-b68bb65ccdcf";
     const c = new OpencodeClient({ port: authServer.port! });
     expect(await c.health()).toBe(true);
     expect(await c.createSession("C:/x")).toBe("sess-auth");
@@ -160,13 +144,13 @@ describe("OpencodeClient", () => {
     expect(id).toBe("sess-1");
   });
 
-  test("prompt posts text part + model + agent to prompt_async", async () => {
+  test("prompt posts text part + model + agent to prompt endpoint", async () => {
     await makeClient().prompt("sess-1", "do the thing", {
       directory: "C:/code/web",
       model: { providerID: "anthropic", modelID: "claude-sonnet-4" },
       agent: "build",
     });
-    const call = seen.find((c) => c.path === "/session/sess-1/prompt_async");
+    const call = seen.find((c) => c.path === "/api/session/sess-1/prompt");
     expect(call).toBeDefined();
     const b = call!.body as { parts: Array<{ type: string; text: string }>; model?: unknown; agent?: string };
     expect(b.parts[0].type).toBe("text");
@@ -177,14 +161,14 @@ describe("OpencodeClient", () => {
 
   test("prompt passes system prompt when provided", async () => {
     await makeClient().prompt("sess-1", "hi", { system: "you are pocket" });
-    const call = seen.filter((c) => c.path === "/session/sess-1/prompt_async").pop();
+    const call = seen.filter((c) => c.path === "/api/session/sess-1/prompt").pop();
     const b = call!.body as { system?: string };
     expect(b.system).toBe("you are pocket");
   });
 
   test("prompt omits system when not provided", async () => {
     await makeClient().prompt("sess-1", "hi");
-    const call = seen.filter((c) => c.path === "/session/sess-1/prompt_async").pop();
+    const call = seen.filter((c) => c.path === "/api/session/sess-1/prompt").pop();
     const b = call!.body as { system?: string };
     expect(b.system).toBeUndefined();
   });
@@ -193,8 +177,8 @@ describe("OpencodeClient", () => {
     const c = makeClient();
     await c.abort("sess-1");
     await c.undo("sess-1");
-    expect(seen.some((x) => x.path === "/session/sess-1/abort")).toBe(true);
-    expect(seen.some((x) => x.path === "/session/sess-1/revert")).toBe(true);
+    expect(seen.some((x) => x.path === "/api/session/sess-1/interrupt")).toBe(true);
+    expect(seen.some((x) => x.path === "/api/session/sess-1/revert/commit")).toBe(true);
   });
 
   test("getDiff maps additions/deletions", async () => {
@@ -220,7 +204,7 @@ describe("OpencodeClient", () => {
 
   test("replyPermission posts response to permission endpoint", async () => {
     await makeClient().replyPermission("sess-1", "perm-9", "once");
-    const call = seen.find((c) => c.path === "/session/sess-1/permissions/perm-9");
+    const call = seen.find((c) => c.path === "/api/session/sess-1/permission/perm-9");
     expect(call).toBeDefined();
     expect((call!.body as { response: string }).response).toBe("once");
   });
@@ -231,12 +215,12 @@ describe("OpencodeClient", () => {
       { id: "sess-a", title: "old title" },
       { id: "sess-b", title: "second" },
     ]);
-    expect(seen.some((c) => c.method === "GET" && c.path === "/session")).toBe(true);
+    expect(seen.some((c) => c.method === "GET" && c.path === "/api/session")).toBe(true);
   });
 
-  test("renameSession posts title update", async () => {
+  test("renameSession patches title update", async () => {
     await makeClient().renameSession("sess-a", "renamed!");
-    const call = seen.find((c) => c.path === "/session/sess-a" && c.method !== "GET");
+    const call = seen.find((c) => c.path === "/api/session/sess-a" && c.method === "PATCH");
     expect(call).toBeDefined();
     expect((call!.body as { title?: string }).title).toBe("renamed!");
   });
@@ -254,7 +238,7 @@ describe("OpencodeClient", () => {
   test("listProjects returns worktree list", async () => {
     const rows = await makeClient().listProjects();
     expect(rows).toEqual([{ id: "p1", worktree: "C:/x" }]);
-    expect(seen.some((c) => c.method === "GET" && c.path === "/project")).toBe(true);
+    expect(seen.some((c) => c.method === "GET" && c.path === "/api/project")).toBe(true);
   });
 });
 

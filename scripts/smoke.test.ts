@@ -17,12 +17,12 @@ describe("integration smoke", () => {
       port: 0,
       async fetch(req) {
         const url = new URL(req.url);
-        if (url.pathname === "/project/current") return Response.json({ id: "p1" });
-        if (url.pathname === "/session" && req.method === "POST") {
+        if (url.pathname === "/api/info") return Response.json({ id: "p1" });
+        if (url.pathname === "/api/session" && req.method === "POST") {
           sessionCount++;
           return Response.json({ id: `sess-${sessionCount}` });
         }
-        if (url.pathname === "/session/sess-1/prompt_async") {
+        if (url.pathname === "/api/session/sess-1/prompt" && req.method === "POST") {
           // simulate opencode streaming a response over SSE
           setTimeout(() => {
             const emit = eventSink[0];
@@ -31,9 +31,9 @@ describe("integration smoke", () => {
             emit({ type: "message.part.updated", properties: { sessionID: "sess-1", part: { type: "text", text: "hi from opencode", sessionID: "sess-1", messageID: "msg_s1", id: "p1" } } });
             emit({ type: "session.idle", properties: { sessionID: "sess-1" } });
           }, 50);
-          return new Response(null, { status: 204 });
+          return new Response(null, { status: 200 });
         }
-        if (url.pathname.startsWith("/session/sess-1/permissions/")) return Response.json({ ok: true });
+        if (url.pathname.startsWith("/api/session/sess-1/permission/")) return Response.json({ ok: true });
         return new Response("nf", { status: 404 });
       },
     });
